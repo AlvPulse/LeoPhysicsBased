@@ -5,7 +5,7 @@ import glob
 from torch_geometric.data import Data, Batch
 
 # Import modules
-from src import config, signal_processing, harmonic_detection
+from src import config, signal_processing, harmonic_detection, baseline_model
 from src.models import LinearHarmonicModel, GNNEventDetector
 
 def process_file(filepath, linear_model, gnn_model, device):
@@ -21,23 +21,35 @@ def process_file(filepath, linear_model, gnn_model, device):
     nf = signal_processing.estimate_noise_floor(psd)
     peaks = signal_processing.find_significant_peaks(f, psd, nf)
 
-    # --- METHOD 1: HEURISTIC ---
+    # --- METHOD 1: BASELINE HEURISTIC ---
+    score1, base_freq1 = baseline_model.detect_baseline_heuristic(peaks)
+
+    # --- METHOD 2 & 3 PREP: ITERATIVE SEARCH ---
     candidates = harmonic_detection.detect_harmonics_iterative(peaks)
 
-    score1 = 0.0
+    linear_vec = np.zeros(20, dtype=np.float32)
     best_candidate_freq = 0.0
 
     if candidates:
         best_candidate = candidates[0]
-        # Normalize score roughly
-        score1 = min(best_candidate['score'] / 500.0, 1.0)
         best_candidate_freq = best_candidate['base_freq']
 
-    # --- PREPARE DATA FOR MODELS ---
+        for h in best_candidate['harmonics']:
+            idx = h['harmonic_index']
+            if idx <= 10:
+                vec_idx = (idx - 1) * 2
+                linear_vec[vec_idx] = h['snr'] / 50.0
+                linear_vec[vec_idx+1] = (h['power'] + 100) / 100.0
+
+    # --- METHOD 2: LINEAR ---
+    with torch.no_grad():
+        lin_input = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0).to(device)
+        score2 = linear_model(lin_input).item()
+
+    # --- METHOD 3: GNN ---
     if not peaks:
-            x = torch.zeros((1, 3), dtype=torch.float)
-            edge_index = torch.zeros((2, 0), dtype=torch.long)
-            linear_vec = np.zeros(20, dtype=np.float32)
+         x = torch.zeros((1, 3), dtype=torch.float)
+         edge_index = torch.zeros((2, 0), dtype=torch.long)
     else:
         freqs = np.array([p['freq'] for p in peaks])
         powers = np.array([p['power'] for p in peaks])
@@ -69,33 +81,29 @@ def process_file(filepath, linear_model, gnn_model, device):
         else:
             edge_index = torch.zeros((2, 0), dtype=torch.long)
 
-        linear_vec = np.zeros(20, dtype=np.float32)
-        if candidates:
-            best = candidates[0]
-            for h in best['harmonics']:
-                idx = h['harmonic_index']
-                if idx <= 10:
-                    vec_idx = (idx - 1) * 2
-                    linear_vec[vec_idx] = h['snr'] / 50.0
-                    linear_vec[vec_idx+1] = (h['power'] + 100) / 100.0
-
-    # --- METHOD 2: LINEAR ---
-    with torch.no_grad():
-        lin_input = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0).to(device)
-        score2 = linear_model(lin_input).item()
-
-    # --- METHOD 3: GNN ---
     with torch.no_grad():
         gnn_batch = Batch.from_data_list([Data(x=x, edge_index=edge_index)]).to(device)
         score3 = gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch).item()
 
     return {
         'filename': os.path.basename(filepath),
-        'heuristic_prob': score1,
+        'baseline_prob': score1,
         'linear_prob': score2,
         'gnn_prob': score3,
-        'base_freq': best_candidate_freq
+        'base_freq': best_candidate_freq if best_candidate_freq > 0 else base_freq1
     }
+
+def print_confusion_matrix(tp, fp, tn, fn, model_name):
+    total = tp + fp + tn + fn
+    accuracy = (tp + tn) / total if total > 0 else 0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+
+    print(f"\nModel: {model_name}")
+    print(f"Accuracy: {accuracy:.2f} | Precision: {precision:.2f} | Recall: {recall:.2f} | F1: {f1:.2f}")
+    print(f"TP: {tp:<4} | FP: {fp:<4}")
+    print(f"FN: {fn:<4} | TN: {tn:<4}")
 
 def main():
     print("Starting Headless Analysis...")
@@ -119,34 +127,60 @@ def main():
     # Find Files
     yes_files = glob.glob("data/yes/*.wav")
     no_files = glob.glob("data/no/*.wav")
-    all_files = yes_files + no_files
+    # Also check debug_data
+    debug_files = glob.glob("debug_data/yes/*.wav")
+
+    all_files = yes_files + no_files + debug_files
 
     print(f"Found {len(all_files)} files.")
-    print(f"{'Filename':<20} | {'Heuristic':<10} | {'Linear':<10} | {'GNN':<10} | {'Freq (Hz)':<10} | {'True Label'}")
+    print(f"{'Filename':<20} | {'Base(H)':<10} | {'Linear':<10} | {'GNN':<10} | {'Freq (Hz)':<10} | {'True Label'}")
     print("-" * 80)
 
-    correct_gnn = 0
-    total = 0
+    # Metrics Accumulators
+    metrics = {
+        'Baseline': {'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0},
+        'Linear': {'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0},
+        'GNN': {'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0},
+    }
 
     for fpath in all_files:
         res = process_file(fpath, linear_model, gnn_model, device)
         if res:
-            is_yes = "yes" in fpath
+            is_yes = "yes" in fpath or "Autel" in fpath # Assuming Autel in debug_data/yes is YES
             label = "YES" if is_yes else "NO"
 
-            # Simple thresholding for accuracy check
-            pred_gnn = res['gnn_prob'] > 0.5
-            if pred_gnn == is_yes:
-                correct_gnn += 1
-            total += 1
+            # Update Metrics (Threshold 0.5)
+            # Baseline
+            p = res['baseline_prob'] > 0.5
+            if is_yes and p: metrics['Baseline']['tp'] += 1
+            elif is_yes and not p: metrics['Baseline']['fn'] += 1
+            elif not is_yes and p: metrics['Baseline']['fp'] += 1
+            elif not is_yes and not p: metrics['Baseline']['tn'] += 1
 
-            # Print only a subset to avoid clutter, or all? Let's print first 5 of each and last 5
-            # Actually, let's print mismatches mostly
-            if (pred_gnn != is_yes) or (total % 10 == 0):
-                print(f"{res['filename']:<20} | {res['heuristic_prob']:<10.2f} | {res['linear_prob']:<10.2f} | {res['gnn_prob']:<10.2f} | {res['base_freq']:<10.1f} | {label}")
+            # Linear
+            p = res['linear_prob'] > 0.5
+            if is_yes and p: metrics['Linear']['tp'] += 1
+            elif is_yes and not p: metrics['Linear']['fn'] += 1
+            elif not is_yes and p: metrics['Linear']['fp'] += 1
+            elif not is_yes and not p: metrics['Linear']['tn'] += 1
+
+            # GNN
+            p = res['gnn_prob'] > 0.5
+            if is_yes and p: metrics['GNN']['tp'] += 1
+            elif is_yes and not p: metrics['GNN']['fn'] += 1
+            elif not is_yes and p: metrics['GNN']['fp'] += 1
+            elif not is_yes and not p: metrics['GNN']['tn'] += 1
+
+            # Print
+            # To avoid spamming, print if incorrect or every 10th
+            is_correct_gnn = (res['gnn_prob'] > 0.5) == is_yes
+            if not is_correct_gnn or (metrics['GNN']['tp'] + metrics['GNN']['tn']) % 10 == 0:
+                print(f"{res['filename']:<20} | {res['baseline_prob']:<10.2f} | {res['linear_prob']:<10.2f} | {res['gnn_prob']:<10.2f} | {res['base_freq']:<10.1f} | {label}")
 
     print("-" * 80)
-    print(f"GNN Accuracy on this set: {correct_gnn}/{total} ({correct_gnn/total*100:.1f}%)")
+
+    for m_name, m_vals in metrics.items():
+        print_confusion_matrix(m_vals['tp'], m_vals['fp'], m_vals['tn'], m_vals['fn'], m_name)
 
 if __name__ == "__main__":
     main()

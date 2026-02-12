@@ -12,10 +12,21 @@ MIN_FREQ = 100.0       # Minimum frequency to consider
 MAX_FREQ = 2000.0      # Maximum frequency to consider
 
 # Peak Detection
-PEAK_HEIGHT_REL = 0.1  # Relative height for peak detection (0-1 of max)
-PEAK_PROMINENCE = 5    # Minimum prominence in dB
-PEAK_DISTANCE = 20     # Minimum distance between peaks in bins
-NUM_PEAKS_TO_KEEP = 15 # Max number of peaks to analyze
+# The user's original code used:
+# PEAK_HEIGHT = max_h - 100
+# PROMINENCE = 4
+# DISTANCE = 40
+# We need to map these to our logic or use similar values.
+
+# Since we normalize our synthetic data to -1..1, max power might be around 0 to -10 dB depending on windowing.
+# If max_h is 0, height > -100 is very permissive.
+# If max_h is -50 (quiet), height > -150 is permissive.
+# So absolute threshold might be better, or relative to noise floor.
+
+PEAK_PROMINENCE = 5    # dB above local minima
+PEAK_DISTANCE = 20     # bins
+NUM_PEAKS_TO_KEEP = 20 # Keep more peaks to avoid missing harmonics
+SNR_THRESHOLD = 3.0    # Minimum SNR in dB to consider a peak significant (lowered from 5)
 
 # Harmonic Detection
 TOLERANCE = 0.05       # Tolerance for harmonic matching (5% deviation)

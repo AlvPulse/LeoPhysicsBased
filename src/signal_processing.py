@@ -54,12 +54,13 @@ def find_significant_peaks(freqs, psd_db, noise_floor_db,
     # We restrict search to defined frequency range
     valid_mask = (freqs >= config.MIN_FREQ) & (freqs <= config.MAX_FREQ)
 
-    # Find peaks based on prominence (height above neighbors) and absolute height
-    # Also ensure SNR > some threshold (e.g. 3dB)
+    max_h = np.max(psd_db)
+    height_threshold = max_h - 120 # Even more permissive
+
     peaks, properties = signal.find_peaks(psd_db,
                                           prominence=min_prominence,
                                           distance=min_dist,
-                                          height=np.min(psd_db)) # basic height check
+                                          height=height_threshold)
 
     detected_peaks = []
 
@@ -72,8 +73,8 @@ def find_significant_peaks(freqs, psd_db, noise_floor_db,
         nf = noise_floor_db[p_idx]
         snr = p - nf
 
-        # Enforce Minimum SNR
-        if snr < 5.0: # Hard threshold: 5dB SNR
+        # Enforce Minimum SNR from Config
+        if snr < config.SNR_THRESHOLD:
             continue
 
         detected_peaks.append({
