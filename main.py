@@ -15,7 +15,7 @@ from src.models import LinearHarmonicModel, GNNEventDetector
 # ⚙️ CONFIGURATION
 # ==========================================
 # Default file
-FILENAME = 'data/yes/sample_001.wav'
+FILENAME = 'data/yes/Autel_Evo_II_20.wav'
 
 # Allow file selection via CLI args if provided
 if len(sys.argv) > 1:
