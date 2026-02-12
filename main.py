@@ -130,6 +130,13 @@ def run_analysis():
         return line_prob1, line_prob2, line_prob3, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line
 
     def update(frame):
+        # Reset history on first frame to prevent looping artifacts
+        if frame == 0:
+            history_t.clear()
+            prob1_y.clear()
+            prob2_y.clear()
+            prob3_y.clear()
+
         start_t = frame * STEP_SIZE
         end_t = start_t + WINDOW_DURATION
         if end_t > duration: return init()
@@ -232,12 +239,14 @@ def run_analysis():
         # --- METHOD 2: LINEAR ---
         with torch.no_grad():
             lin_input = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0).to(device)
-            score2 = linear_model(lin_input).item()
+            # Models output logits, apply sigmoid for probability
+            score2 = torch.sigmoid(linear_model(lin_input)).item()
 
         # --- METHOD 3: GNN ---
         with torch.no_grad():
             gnn_batch = Batch.from_data_list([Data(x=x, edge_index=edge_index)]).to(device)
-            score3 = gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch).item()
+            # Models output logits, apply sigmoid for probability
+            score3 = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
 
         # Update Plots
         history_t.append(start_t)
