@@ -72,7 +72,6 @@ class HarmonicDataset(Dataset):
             x = torch.tensor(np.column_stack((f_norm, p_norm, s_norm)), dtype=torch.float)
 
             # Build edges
-            # Link any peak to another if frequency ratio is close to integer > 1
             edge_src = []
             edge_dst = []
 
@@ -94,9 +93,6 @@ class HarmonicDataset(Dataset):
                     if harmonic_idx > 1 and drift < config.TOLERANCE:
                         edge_src.append(i)
                         edge_dst.append(j)
-                        # Also add reverse edge for undirected graph in GNN?
-                        # Or keep directed: Base -> Harmonic
-                        # Let's keep directed Base -> Harmonic
 
             if edge_src:
                 edge_index = torch.tensor([edge_src, edge_dst], dtype=torch.long)
@@ -105,19 +101,7 @@ class HarmonicDataset(Dataset):
 
             # --- Prepare Linear Data ---
             candidates = harmonic_detection.detect_harmonics_iterative(peaks)
-            linear_vec = np.zeros(20, dtype=np.float32)
-
-            if candidates:
-                best = candidates[0]
-                # base_freq = best['base_freq']
-
-                for h in best['harmonics']:
-                    idx = h['harmonic_index']
-                    if idx <= 10:
-                        vec_idx = (idx - 1) * 2
-                        linear_vec[vec_idx] = h['snr'] / 50.0
-                        linear_vec[vec_idx+1] = (h['power'] + 100) / 100.0
-
+            linear_vec = harmonic_detection.extract_linear_features(candidates)
             linear_features = torch.tensor(linear_vec, dtype=torch.float)
 
         gnn_data = Data(x=x, edge_index=edge_index, y=torch.tensor([label], dtype=torch.float))

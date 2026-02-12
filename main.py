@@ -226,14 +226,8 @@ def run_analysis():
             else:
                 edge_index = torch.zeros((2, 0), dtype=torch.long)
 
-            linear_vec = np.zeros(20, dtype=np.float32)
-            if best_candidate:
-                for h in best_candidate['harmonics']:
-                    idx = h['harmonic_index']
-                    if idx <= 10:
-                        vec_idx = (idx - 1) * 2
-                        linear_vec[vec_idx] = h['snr'] / 50.0
-                        linear_vec[vec_idx+1] = (h['power'] + 100) / 100.0
+            # Use shared feature extraction logic
+            linear_vec = harmonic_detection.extract_linear_features(candidates)
 
         # --- METHOD 2: LINEAR ---
         with torch.no_grad():
