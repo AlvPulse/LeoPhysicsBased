@@ -1,20 +1,20 @@
 # Configuration parameters for Harmonic Detector
 
 # Audio
-SAMPLE_RATE = 44100
+SAMPLE_RATE = 8096
 WINDOW_DURATION = 2.0  # seconds
 STEP_SIZE = 0.5        # seconds
 
 # Signal Processing
-N_FFT = 4096           # Increased for better frequency resolution (was 2048)
+N_FFT = 2048           # Increased for better frequency resolution (was 2048)
 HOP_LENGTH = 1024      # Overlap (adjusted for N_FFT)
-MIN_FREQ = 50.0        # Minimum frequency to consider
+MIN_FREQ = 100.0        # Minimum frequency to consider
 MAX_FREQ = 2000.0      # Maximum frequency to consider
 
 # Peak Detection
 PEAK_PROMINENCE = 3    # dB above local minima
-PEAK_DISTANCE = 2      # bins
-NUM_PEAKS_TO_KEEP = 30 # Keep more peaks to avoid missing harmonics
+PEAK_DISTANCE = 10      # bins
+NUM_PEAKS_TO_KEEP = 20 # Keep more peaks to avoid missing harmonics
 SNR_THRESHOLD = 1.5    # Minimum SNR in dB to consider a peak significant
 
 # Harmonic Detection
