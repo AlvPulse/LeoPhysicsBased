@@ -18,8 +18,10 @@ NUM_PEAKS_TO_KEEP = 30 # Keep more peaks to avoid missing harmonics
 SNR_THRESHOLD = 1.5    # Minimum SNR in dB to consider a peak significant
 
 # Harmonic Detection
-TOLERANCE = 0.1        # Tolerance for harmonic matching
+TOLERANCE = 0.1        # Tolerance for harmonic matching (e.g. 0.1 means +/- 10% drift allowed)
 MIN_HARMONICS = 2      # Minimum number of harmonics to be considered a valid event
+HARMONIC_MIN_SNR = 5.0 # SNR threshold specifically for validating harmonic candidates
+HARMONIC_MIN_POWER = -60.0 # Absolute power threshold (dB)
 
 # Noise Estimation
 NOISE_FLOOR_WINDOW = 50 # Window size for median filter (in frequency bins)

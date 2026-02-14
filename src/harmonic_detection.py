@@ -23,16 +23,24 @@ def calculate_quality(harmonic):
     q = (w_snr * snr_norm) + (w_pwr * pwr_norm) + (w_drift * drift_score)
     return q
 
-def detect_harmonics_iterative(peaks, max_candidates=5):
+def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, power_threshold=None, tolerance=None):
     """
     Refined harmonic detection.
     Args:
         peaks: List of peak dicts.
         max_candidates: Number of best candidates to return.
+        snr_threshold: Optional override for minimum SNR (default from config).
+        power_threshold: Optional override for minimum Power (default from config).
+        tolerance: Optional override for harmonic tolerance (default from config).
     Returns:
         List of candidate dicts: {'base_freq', 'harmonics': list, 'score': float}
     """
     candidates = []
+
+    # Use config defaults if not provided
+    if snr_threshold is None: snr_threshold = config.HARMONIC_MIN_SNR
+    if power_threshold is None: power_threshold = config.HARMONIC_MIN_POWER
+    if tolerance is None: tolerance = config.TOLERANCE
 
     if not peaks:
         return candidates
@@ -69,16 +77,20 @@ def detect_harmonics_iterative(peaks, max_candidates=5):
 
             # Optimization: could use binary search or just iterate since N is small (<20)
             for p in peaks_sorted_freq:
+                # Check thresholds
+                if p['snr'] < snr_threshold: continue
+                if p['power'] < power_threshold: continue
+
                 # Optimized range check
-                lower_bound = target_freq * (1 - config.TOLERANCE)
-                upper_bound = target_freq * (1 + config.TOLERANCE)
+                lower_bound = target_freq * (1 - tolerance)
+                upper_bound = target_freq * (1 + tolerance)
 
                 if p['freq'] < lower_bound: continue
                 if p['freq'] > upper_bound: break # Sorted, so can stop early
 
                 dist = abs(p['freq'] - target_freq)
                 # Check absolute distance relative to tolerance
-                if dist < (target_freq * config.TOLERANCE):
+                if dist < (target_freq * tolerance):
                     if dist < min_dist:
                         min_dist = dist
                         best_match = p

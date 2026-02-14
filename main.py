@@ -5,6 +5,7 @@ import torch
 from matplotlib.animation import FuncAnimation
 import os
 import sys
+import argparse
 from torch_geometric.data import Data, Batch
 
 # Import modules
@@ -14,6 +15,7 @@ from src.models import LinearHarmonicModel, GNNEventDetector
 # ==========================================
 # ⚙️ CONFIGURATION
 # ==========================================
+
 # Default file
 FILENAME = 'data/yes/Autel_Evo_II_20.wav'
 
@@ -25,11 +27,32 @@ WINDOW_DURATION = config.WINDOW_DURATION
 STEP_SIZE = config.STEP_SIZE
 REFRESH_INTERVAL = 100
 
+
+
 def run_analysis():
+    parser = argparse.ArgumentParser(description='Harmonic Event Detector - Real-time Visualization')
+    parser.add_argument('filename', nargs='?', default='data/yes/sample_001.wav', help='Path to WAV file')
+    parser.add_argument('--snr', type=float, default=config.HARMONIC_MIN_SNR, help='Minimum SNR threshold (dB) for harmonic candidates')
+    parser.add_argument('--power', type=float, default=config.HARMONIC_MIN_POWER, help='Minimum Power threshold (dB) for harmonic candidates')
+    parser.add_argument('--tolerance', type=float, default=config.TOLERANCE, help='Harmonic frequency tolerance ratio')
+
+    args = parser.parse_args()
+
+    FILENAME = args.filename
+    SNR_THRESH = args.snr
+    PWR_THRESH = args.power
+    TOLERANCE = args.tolerance
+
     print(f"Analyzing {FILENAME}...")
+    print(f"Settings: SNR>={SNR_THRESH}dB, Pwr>={PWR_THRESH}dB, Tol={TOLERANCE}")
+
     if not os.path.exists(FILENAME):
         print(f"File not found: {FILENAME}")
         return
+
+    WINDOW_DURATION = config.WINDOW_DURATION
+    STEP_SIZE = config.STEP_SIZE
+    REFRESH_INTERVAL = 100
 
     # Load Models
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -162,7 +185,12 @@ def run_analysis():
         score1, base_freq1 = baseline_model.detect_baseline_heuristic(peaks)
 
         # --- METHOD 2 & 3 PREP: ITERATIVE SEARCH ---
-        candidates = harmonic_detection.detect_harmonics_iterative(peaks)
+        candidates = harmonic_detection.detect_harmonics_iterative(
+            peaks,
+            snr_threshold=SNR_THRESH,
+            power_threshold=PWR_THRESH,
+            tolerance=TOLERANCE
+        )
 
         best_candidate = None
         if candidates:

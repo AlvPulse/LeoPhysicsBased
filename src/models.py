@@ -16,8 +16,7 @@ class LinearHarmonicModel(nn.Module):
 
     def forward(self, x):
         # x shape: (batch_size, input_dim)
-        out = self.linear(x)
-        return torch.sigmoid(out)
+        return self.linear(x)
 
 class GNNEventDetector(torch.nn.Module):
     """
@@ -57,4 +56,4 @@ class GNNEventDetector(torch.nn.Module):
         x = F.dropout(x, p=0.2, training=self.training)
         x = self.lin2(x)
 
-        return torch.sigmoid(x)
+        return x

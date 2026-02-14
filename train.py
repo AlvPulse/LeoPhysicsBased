@@ -14,6 +14,17 @@ def train():
 
     dataset = HarmonicDataset(root_dir='data')
 
+    # Calculate Class Weights
+    y_labels = np.array(dataset.labels)
+    n_pos = np.sum(y_labels == 1.0)
+    n_neg = np.sum(y_labels == 0.0)
+
+    # Weight = Number of Negatives / Number of Positives
+    # If n_pos is 0, default to 1
+    weight_val = n_neg / n_pos if n_pos > 0 else 1.0
+    pos_weight = torch.tensor([weight_val], dtype=torch.float).to(device)
+    print(f"Class Distribution: YES={n_pos}, NO={n_neg}, Pos Weight={weight_val:.2f}")
+
     # Validation Split
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
@@ -30,7 +41,7 @@ def train():
     opt_linear = optim.Adam(linear_model.parameters(), lr=config.LEARNING_RATE)
     opt_gnn = optim.Adam(gnn_model.parameters(), lr=config.LEARNING_RATE)
 
-    criterion = nn.BCELoss()
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     for epoch in range(config.EPOCHS):
         linear_model.train()
@@ -56,7 +67,7 @@ def train():
             opt_linear.step()
 
             train_loss_lin += loss_linear.item()
-            train_acc_lin += ((out_linear > 0.5) == labels).sum().item()
+            train_acc_lin += ((out_linear > 0) == labels).sum().item()
 
             # GNN Train
             opt_gnn.zero_grad()
@@ -66,7 +77,7 @@ def train():
             opt_gnn.step()
 
             train_loss_gnn += loss_gnn.item()
-            train_acc_gnn += ((out_gnn > 0.5) == labels).sum().item()
+            train_acc_gnn += ((out_gnn > 0) == labels).sum().item()
 
         # Validation
         linear_model.eval()
@@ -84,10 +95,10 @@ def train():
                 if lin_feat.dim() == 3: lin_feat = lin_feat.squeeze(1)
 
                 out_linear = linear_model(lin_feat)
-                val_acc_lin += ((out_linear > 0.5) == labels).sum().item()
+                val_acc_lin += ((out_linear > 0) == labels).sum().item()
 
                 out_gnn = gnn_model(batch.x, batch.edge_index, batch.batch)
-                val_acc_gnn += ((out_gnn > 0.5) == labels).sum().item()
+                val_acc_gnn += ((out_gnn > 0) == labels).sum().item()
 
         # Metrics
         t_acc_lin = train_acc_lin / len(train_dataset)
