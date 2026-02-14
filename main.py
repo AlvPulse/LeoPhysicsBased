@@ -247,12 +247,12 @@ def run_analysis():
         # --- METHOD 2: LINEAR ---
         with torch.no_grad():
             lin_input = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0).to(device)
-            score2 = linear_model(lin_input).item()
+            score2 = torch.sigmoid(linear_model(lin_input)).item()
 
         # --- METHOD 3: GNN ---
         with torch.no_grad():
             gnn_batch = Batch.from_data_list([Data(x=x, edge_index=edge_index)]).to(device)
-            score3 = gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch).item()
+            score3 = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
 
         # Update Plots
         history_t.append(start_t)
