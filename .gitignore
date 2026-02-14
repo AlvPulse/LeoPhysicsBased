@@ -1,6 +1,0 @@
-__pycache__/
-*.pyc
-*.pth
-data/
-train_output.txt
-headless_output.txt

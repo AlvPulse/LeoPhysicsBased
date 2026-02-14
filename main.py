@@ -5,6 +5,7 @@ import torch
 from matplotlib.animation import FuncAnimation
 import os
 import sys
+import argparse
 from torch_geometric.data import Data, Batch
 
 # Import modules
@@ -14,22 +15,31 @@ from src.models import LinearHarmonicModel, GNNEventDetector
 # ==========================================
 # ⚙️ CONFIGURATION
 # ==========================================
-# Default file
-FILENAME = 'data/yes/sample_001.wav'
-
-# Allow file selection via CLI args if provided
-if len(sys.argv) > 1:
-    FILENAME = sys.argv[1]
-
-WINDOW_DURATION = config.WINDOW_DURATION
-STEP_SIZE = config.STEP_SIZE
-REFRESH_INTERVAL = 100
 
 def run_analysis():
+    parser = argparse.ArgumentParser(description='Harmonic Event Detector - Real-time Visualization')
+    parser.add_argument('filename', nargs='?', default='data/yes/sample_001.wav', help='Path to WAV file')
+    parser.add_argument('--snr', type=float, default=config.HARMONIC_MIN_SNR, help='Minimum SNR threshold (dB) for harmonic candidates')
+    parser.add_argument('--power', type=float, default=config.HARMONIC_MIN_POWER, help='Minimum Power threshold (dB) for harmonic candidates')
+    parser.add_argument('--tolerance', type=float, default=config.TOLERANCE, help='Harmonic frequency tolerance ratio')
+
+    args = parser.parse_args()
+
+    FILENAME = args.filename
+    SNR_THRESH = args.snr
+    PWR_THRESH = args.power
+    TOLERANCE = args.tolerance
+
     print(f"Analyzing {FILENAME}...")
+    print(f"Settings: SNR>={SNR_THRESH}dB, Pwr>={PWR_THRESH}dB, Tol={TOLERANCE}")
+
     if not os.path.exists(FILENAME):
         print(f"File not found: {FILENAME}")
         return
+
+    WINDOW_DURATION = config.WINDOW_DURATION
+    STEP_SIZE = config.STEP_SIZE
+    REFRESH_INTERVAL = 100
 
     # Load Models
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -130,13 +140,6 @@ def run_analysis():
         return line_prob1, line_prob2, line_prob3, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line
 
     def update(frame):
-        # Reset history on first frame to prevent looping artifacts
-        if frame == 0:
-            history_t.clear()
-            prob1_y.clear()
-            prob2_y.clear()
-            prob3_y.clear()
-
         start_t = frame * STEP_SIZE
         end_t = start_t + WINDOW_DURATION
         if end_t > duration: return init()
@@ -169,7 +172,12 @@ def run_analysis():
         score1, base_freq1 = baseline_model.detect_baseline_heuristic(peaks)
 
         # --- METHOD 2 & 3 PREP: ITERATIVE SEARCH ---
-        candidates = harmonic_detection.detect_harmonics_iterative(peaks)
+        candidates = harmonic_detection.detect_harmonics_iterative(
+            peaks,
+            snr_threshold=SNR_THRESH,
+            power_threshold=PWR_THRESH,
+            tolerance=TOLERANCE
+        )
 
         best_candidate = None
         if candidates:
@@ -239,14 +247,12 @@ def run_analysis():
         # --- METHOD 2: LINEAR ---
         with torch.no_grad():
             lin_input = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0).to(device)
-            # Models output logits, apply sigmoid for probability
-            score2 = torch.sigmoid(linear_model(lin_input)).item()
+            score2 = linear_model(lin_input).item()
 
         # --- METHOD 3: GNN ---
         with torch.no_grad():
             gnn_batch = Batch.from_data_list([Data(x=x, edge_index=edge_index)]).to(device)
-            # Models output logits, apply sigmoid for probability
-            score3 = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
+            score3 = gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch).item()
 
         # Update Plots
         history_t.append(start_t)
