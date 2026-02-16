@@ -13,7 +13,7 @@ from src import config, signal_processing, harmonic_detection, models, feature_e
 # ==========================================
 # ⚙️ CONFIGURATION
 # ==========================================
-FILENAME = 'data/yes/Yuneec_Typhoon_H_Plus_26.wav' # Default file
+FILENAME = 'data/yes/Autel_Evo_II_20.wav' # Default file
 WINDOW_DURATION = config.WINDOW_DURATION
 STEP_SIZE = config.STEP_SIZE
 REFRESH_INTERVAL = 100 # ms
@@ -99,7 +99,6 @@ def run_analysis(filename=None):
     if duration < WINDOW_DURATION:
         print(f"Warning: File duration {duration:.2f}s is shorter than window {WINDOW_DURATION}s.")
         return
-
     # Pre-calc Spectrogram for background
     f_spec, t_spec, Sxx = signal.spectrogram(audio, fs, nperseg=1024)
     Sxx_db = 10 * np.log10(Sxx + 1e-10)
@@ -129,7 +128,9 @@ def run_analysis(filename=None):
     ax_spec.pcolormesh(t_spec, f_spec, Sxx_db, shading='gouraud', cmap='inferno')
     cursor_line = ax_spec.axvline(x=0, color='cyan', linestyle='--')
     ax_spec.set_title("Spectrogram", fontweight='bold')
+    ax_spec.set_ylim(0,config.MAX_FREQ)
     ax_spec.set_ylabel("Freq (Hz)")
+    
 
     # 3. Instantaneous PSD & Detections
     ax_psd = axes[1, 0]
@@ -178,11 +179,14 @@ def run_analysis(filename=None):
         s_idx, e_idx = int(start_t*fs), int(end_t*fs)
         slice_audio = audio[s_idx:e_idx]
         if len(slice_audio) < 2048: return init()
-
+        f, Pxx = signal.welch(slice_audio, fs, nperseg=2048, noverlap=0.75*2048)
+        psd_db = 10 * np.log10(Pxx + 1e-10)
         # 1. Signal Processing
         f, psd_db = signal_processing.compute_psd(slice_audio, fs)
+        
         nf = signal_processing.estimate_noise_floor(psd_db)
         peaks = signal_processing.find_significant_peaks(f, psd_db, nf)
+
 
         # 2. Harmonic Detection
         candidates = harmonic_detection.detect_harmonics_iterative(peaks)

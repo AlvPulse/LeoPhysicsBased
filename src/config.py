@@ -2,7 +2,7 @@
 
 # Audio
 SAMPLE_RATE = 8096
-WINDOW_DURATION = 2.0  # seconds
+WINDOW_DURATION = 0.1  # seconds
 STEP_SIZE = 0.5        # seconds
 
 # Signal Processing
