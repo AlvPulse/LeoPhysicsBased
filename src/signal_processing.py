@@ -36,24 +36,95 @@ def compute_psd(audio, fs, nperseg=config.N_FFT):
     Pxx_db = 10 * np.log10(Pxx + 1e-10)
     return f, Pxx_db
 
+def compute_spectral_features(magnitude_spectrum, power_spectrum, freqs):
+    """
+    Computes spectral features for a single frame.
+    magnitude_spectrum: |X(f)|
+    power_spectrum: |X(f)|^2
+    freqs: frequency bins
+    """
+    # Avoid division by zero
+    sum_power = np.sum(power_spectrum) + 1e-10
+    sum_mag = np.sum(magnitude_spectrum) + 1e-10
+
+    # 1. Spectral Centroid
+    centroid = np.sum(freqs * power_spectrum) / sum_power
+
+    # 2. Spectral Flatness (Geometric Mean / Arithmetic Mean)
+    # limit to > 0
+    ps_safe = power_spectrum + 1e-10
+    gmean = np.exp(np.mean(np.log(ps_safe)))
+    amean = np.mean(ps_safe)
+    flatness = gmean / (amean + 1e-10)
+
+    # 3. RMS (approx from frequency domain via Parseval's)
+    # Energy is proportional to sum of power spectrum
+    # We can just use sqrt(mean(power)) as a feature proportional to RMS
+    rms = np.sqrt(np.mean(power_spectrum))
+
+    # PAPR proxy: Max Power / Mean Power
+    papr = np.max(power_spectrum) / (np.mean(power_spectrum) + 1e-10)
+
+    return {
+        'centroid': centroid,
+        'flatness': flatness,
+        'rms': rms,
+        'papr': papr
+    }
+
 def compute_spectrogram_and_peaks(audio, fs, nperseg=config.N_FFT, noverlap=None):
     """Computes spectrogram and finds peaks per time frame."""
     if noverlap is None:
         noverlap = nperseg - config.HOP_LENGTH
 
     f, t, Zxx = signal.stft(audio, fs, nperseg=nperseg, noverlap=noverlap)
-    Pxx = np.abs(Zxx)**2
+
+    # Zxx is complex: (freqs, times)
+    magnitude = np.abs(Zxx)
+    Pxx = magnitude**2
     Pxx_db = 10 * np.log10(Pxx + 1e-10)
 
     peaks_per_frame = []
+    spectral_features = []
+
+    prev_magnitude = None
+    prev_rms = None
 
     for i in range(Pxx_db.shape[1]):
+        # Per-frame spectral features
+        mag_frame = magnitude[:, i]
+        pow_frame = Pxx[:, i]
+
+        feats = compute_spectral_features(mag_frame, pow_frame, f)
+
+        # Calculate Flux (Delta Magnitude)
+        if prev_magnitude is None:
+            flux = 0.0
+        else:
+            flux = np.linalg.norm(mag_frame - prev_magnitude)
+
+        feats['flux'] = flux
+
+        # Calculate Delta RMS (Energy Velocity)
+        curr_rms = feats['rms']
+        if prev_rms is None:
+            delta_rms = 0.0
+        else:
+            delta_rms = curr_rms - prev_rms
+
+        feats['delta_rms'] = delta_rms
+
+        spectral_features.append(feats)
+        prev_magnitude = mag_frame
+        prev_rms = curr_rms
+
+        # Peak Detection
         psd_frame = Pxx_db[:, i]
         nf = estimate_noise_floor(psd_frame)
         peaks = find_significant_peaks(f, psd_frame, nf)
         peaks_per_frame.append(peaks)
 
-    return f, t, Pxx_db, peaks_per_frame
+    return f, t, Pxx_db, peaks_per_frame, spectral_features
 
 def estimate_noise_floor(psd_db, window_size=config.NOISE_FLOOR_WINDOW):
     """Estimates the noise floor using a median filter."""

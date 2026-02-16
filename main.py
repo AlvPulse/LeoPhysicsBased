@@ -58,13 +58,13 @@ def run_analysis():
 
     duration = len(audio) / fs
 
-    # 1. Compute STFT and Peaks (Full File)
+    # 1. Compute STFT, Peaks, and Spectral Features
     print("Computing STFT and Peaks...")
-    f, t, Pxx_db, peaks_per_frame = signal_processing.compute_spectrogram_and_peaks(audio, fs)
+    f, t, Pxx_db, peaks_per_frame, spectral_features = signal_processing.compute_spectrogram_and_peaks(audio, fs)
 
     # 2. Track Harmonics (Persistence)
     print("Tracking Harmonics...")
-    tracks = harmonic_detection.track_harmonics(peaks_per_frame, t)
+    tracks = harmonic_detection.track_harmonics(peaks_per_frame, t, spectral_features)
 
     # 3. Calculate Probabilities Time Series
     num_frames = len(t)

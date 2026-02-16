@@ -76,16 +76,26 @@ def extract_classifier_features(track, num_harmonics=10):
         num_harmonics (int): Number of harmonics to include features for.
 
     Returns:
-        np.array: Feature vector of shape (5 + num_harmonics * 2,)
+        np.array: Feature vector of shape (11 + num_harmonics * 2,)
     """
     # Base features
-    # 1. Base Frequency (Normalized)
-    # 2. Max Score
-    # 3. Persistence
-    # 4. Harmonic Count
-    # 5. Average Drift
+    # 0. Base Frequency (Normalized)
+    # 1. Max Score
+    # 2. Persistence
+    # 3. Harmonic Count
+    # 4. Average Drift
 
-    feature_dim = 5 + (num_harmonics * 2)
+    # Spectral Features (New)
+    # 5. Centroid
+    # 6. Flux
+    # 7. Flatness
+    # 8. RMS
+    # 9. PAPR
+    # 10. Delta RMS
+
+    # Harmonic Features (11...)
+
+    feature_dim = 11 + (num_harmonics * 2)
     vec = np.zeros(feature_dim, dtype=np.float32)
 
     if not track:
@@ -114,13 +124,34 @@ def extract_classifier_features(track, num_harmonics=10):
         avg_drift = np.mean([h.get('drift', 0.0) for h in harmonics])
     vec[4] = avg_drift
 
+    # Spectral Features from 'best_frame_features'
+    spectral = track.get('best_frame_features', {})
+
+    # 5. Centroid (Normalized)
+    vec[5] = spectral.get('centroid', 0.0) / config.MAX_FREQ
+
+    # 6. Flux
+    vec[6] = spectral.get('flux', 0.0)
+
+    # 7. Flatness
+    vec[7] = spectral.get('flatness', 0.0)
+
+    # 8. RMS
+    vec[8] = spectral.get('rms', 0.0)
+
+    # 9. PAPR
+    vec[9] = spectral.get('papr', 0.0)
+
+    # 10. Delta RMS
+    vec[10] = spectral.get('delta_rms', 0.0)
+
     # Harmonic Specific Features (SNR, Power)
     # Harmonics are typically 1-indexed (Fundamental is 1)
-    # We map harmonic index i to vector index 5 + (i-1)*2
+    # We map harmonic index i to vector index 11 + (i-1)*2
     for h in harmonics:
         idx = h.get('harmonic_index', 0)
         if 1 <= idx <= num_harmonics:
-            vec_idx = 5 + (idx - 1) * 2
+            vec_idx = 11 + (idx - 1) * 2
 
             # SNR
             snr = h.get('snr', 0.0)
