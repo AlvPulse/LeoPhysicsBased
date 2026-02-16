@@ -17,7 +17,7 @@ from src.models import LinearHarmonicModel, GNNEventDetector
 # ==========================================
 
 # Default file
-FILENAME = 'data/yes/Autel_Evo_II_20.wav'
+TEST_FILENAME = 'data/yes/DJI_Tello_TT_93.wav'
 
 # Allow file selection via CLI args if provided
 if len(sys.argv) > 1:
@@ -31,7 +31,7 @@ REFRESH_INTERVAL = 100
 
 def run_analysis():
     parser = argparse.ArgumentParser(description='Harmonic Event Detector - Real-time Visualization')
-    parser.add_argument('filename', nargs='?', default='data/yes/sample_001.wav', help='Path to WAV file')
+    parser.add_argument('filename', nargs='?', default=TEST_FILENAME, help='Path to WAV file')
     parser.add_argument('--snr', type=float, default=config.HARMONIC_MIN_SNR, help='Minimum SNR threshold (dB) for harmonic candidates')
     parser.add_argument('--power', type=float, default=config.HARMONIC_MIN_POWER, help='Minimum Power threshold (dB) for harmonic candidates')
     parser.add_argument('--tolerance', type=float, default=config.TOLERANCE, help='Harmonic frequency tolerance ratio')
