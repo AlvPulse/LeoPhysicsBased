@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
-from src import config, signal_processing, harmonic_detection
+from src import config, signal_processing, harmonic_detection, feature_extraction
 
 class HarmonicData(Data):
     def __inc__(self, key, value, *args, **kwargs):
@@ -73,38 +73,22 @@ class HarmonicDataset(Dataset):
         linear_features = harmonic_detection.extract_linear_features(candidates)
 
         # 4. Graph Construction (For GNN)
-        # Nodes: [freq_norm, snr_norm, pwr_norm]
-        node_features = []
-        for p in peaks:
-            f_norm = p['freq'] / config.MAX_FREQ
-            snr_norm = min(max(p['snr'], 0), 50) / 50.0
-            pwr_norm = min(max(p['power'] + 100, 0), 100) / 100.0
-            node_features.append([f_norm, snr_norm, pwr_norm])
+        # Use the consistent graph construction method
+        gnn_data = feature_extraction.build_gnn_data(peaks, label)
 
-        if not node_features:
-            # Handle empty peaks case (silence)
-            # Create a dummy node to avoid GNN crash
-            node_features = [[0.0, 0.0, 0.0]]
-            edge_index = torch.tensor([[0], [0]], dtype=torch.long)
-        else:
-            # Fully connected graph
-            num_nodes = len(node_features)
-            edge_index = []
-            for i in range(num_nodes):
-                for j in range(num_nodes):
-                    if i != j:
-                        edge_index.append([i, j])
-
-            edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-
-            if edge_index.numel() == 0: # Single node case resulted in no edges
-                 edge_index = torch.tensor([[0], [0]], dtype=torch.long)
-
-        x = torch.tensor(node_features, dtype=torch.float)
-        y = torch.tensor([label], dtype=torch.float)
+        # If the graph is empty (no peaks), build_gnn_data returns dummy node/edges
+        # handled inside build_gnn_data
 
         # Linear Features as Tensor
         # Add batch dimension so PyG treats it as a graph-level attribute
         linear_x = torch.tensor(linear_features, dtype=torch.float).unsqueeze(0)
 
-        return HarmonicData(x=x, edge_index=edge_index, y=y, linear_x=linear_x)
+        # Create the custom data object
+        data = HarmonicData(
+            x=gnn_data.x,
+            edge_index=gnn_data.edge_index,
+            y=gnn_data.y,
+            linear_x=linear_x
+        )
+
+        return data
