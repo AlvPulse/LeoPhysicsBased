@@ -4,7 +4,6 @@ import numpy as np
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
 from src import config, signal_processing, harmonic_detection, feature_extraction
-from tqdm import tqdm
 
 class HarmonicData(Data):
     def __inc__(self, key, value, *args, **kwargs):
@@ -18,12 +17,10 @@ class HarmonicData(Data):
         return super().__cat_dim__(key, value, *args, **kwargs)
 
 class HarmonicDataset(Dataset):
-    def __init__(self, data_dir='data', mode='train', split_ratio=0.8, transform=None, cache=True):
+    def __init__(self, data_dir='data', mode='train', split_ratio=0.8, transform=None):
         self.data_dir = data_dir
         self.mode = mode
         self.transform = transform
-        self.cache = cache
-        self.data_cache = {} # Dict: idx -> Data
 
         self.file_list = []
         self.labels = []
@@ -31,11 +28,6 @@ class HarmonicDataset(Dataset):
         # Load file paths
         yes_dir = os.path.join(data_dir, 'yes')
         no_dir = os.path.join(data_dir, 'no')
-
-        # Check if dirs exist
-        if not os.path.exists(yes_dir) or not os.path.exists(no_dir):
-            print(f"Warning: Data directories not found in {data_dir}")
-            return
 
         yes_files = [os.path.join(yes_dir, f) for f in os.listdir(yes_dir) if f.endswith('.wav')]
         no_files = [os.path.join(no_dir, f) for f in os.listdir(no_dir) if f.endswith('.wav')]
@@ -55,30 +47,18 @@ class HarmonicDataset(Dataset):
         else:
             data = combined[split_idx:]
 
-        if not data:
-            self.file_list, self.labels = [], []
-        else:
-            self.file_list, self.labels = zip(*data)
-
-        if self.cache and len(self.file_list) > 0:
-            print(f"Pre-loading {len(self.file_list)} files into memory...")
-            for i in tqdm(range(len(self.file_list))):
-                self._load_item(i)
+        self.file_list, self.labels = zip(*data)
 
     def __len__(self):
         return len(self.file_list)
 
-    def _load_item(self, idx):
-        if self.cache and idx in self.data_cache:
-            return self.data_cache[idx]
-
+    def __getitem__(self, idx):
         filepath = self.file_list[idx]
         label = self.labels[idx]
 
         # 1. Load Audio
         audio, fs = signal_processing.load_audio(filepath)
         if audio is None:
-            # Fallback for corrupted audio
             return None
 
         # 2. Compute Spectrogram & Peaks (Take average or max over time?)
@@ -111,10 +91,4 @@ class HarmonicDataset(Dataset):
             linear_x=linear_x
         )
 
-        if self.cache:
-            self.data_cache[idx] = data
-
         return data
-
-    def __getitem__(self, idx):
-        return self._load_item(idx)

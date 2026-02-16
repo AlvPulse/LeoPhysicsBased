@@ -130,6 +130,7 @@ def run_analysis(filename=None):
     cursor_line = ax_spec.axvline(x=0, color='cyan', linestyle='--')
     ax_spec.set_title("Spectrogram", fontweight='bold')
     ax_spec.set_ylabel("Freq (Hz)")
+    ax_spec.set_ylim(0, config.MAX_FREQ * 1.1) # Show slightly more than max freq
 
     # 3. Instantaneous PSD & Detections
     ax_psd = axes[1, 0]

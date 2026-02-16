@@ -89,8 +89,27 @@ def print_confusion_matrix(tp, fp, tn, fn, model_name):
     print(f"TP: {tp:<4} | FP: {fp:<4}")
     print(f"FN: {fn:<4} | TN: {tn:<4}")
 
+import json
+
+def load_optimized_config():
+    if os.path.exists('models/best_config.json'):
+        with open('models/best_config.json', 'r') as f:
+            try:
+                params = json.load(f)
+                print(f"Loaded optimized params: {params}")
+                if 'tolerance' in params: config.TOLERANCE = params['tolerance']
+                if 'snr_threshold' in params: config.HARMONIC_MIN_SNR = params['snr_threshold']
+                if 'power_threshold' in params: config.HARMONIC_MIN_POWER = params['power_threshold']
+                if 'weights' in params: config.QUALITY_WEIGHTS = params['weights']
+            except json.JSONDecodeError:
+                print("Warning: best_config.json is corrupted.")
+    else:
+        print("Using default config.")
+
 def main():
     print("Starting Headless Analysis (Persistence Enabled)...")
+
+    load_optimized_config()
 
     # Load Models
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

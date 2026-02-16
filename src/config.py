@@ -6,16 +6,17 @@ WINDOW_DURATION = 2.0  # seconds
 STEP_SIZE = 0.5        # seconds
 
 # Signal Processing
-N_FFT = 4096           # Increased for better frequency resolution (was 2048)
-HOP_LENGTH = 1024      # Overlap (adjusted for N_FFT)
-MIN_FREQ = 50.0        # Minimum frequency to consider
-MAX_FREQ = 2000.0      # Maximum frequency to consider
+N_FFT = 2048           # Restored to legacy 2048
+HOP_LENGTH = 512       # 25% of 2048 (75% overlap)
+MIN_FREQ = 150.0       # Restored to legacy 150
+MAX_FREQ = 2000.0      # Restored to legacy 2000
 
 # Peak Detection
-PEAK_PROMINENCE = 3    # dB above local minima
-PEAK_DISTANCE = 2      # bins
+PEAK_PROMINENCE = 4    # Restored to legacy 4
+PEAK_DISTANCE = 5      # Adjusted for 44.1kHz (approx 100Hz spacing)
 NUM_PEAKS_TO_KEEP = 30 # Keep more peaks to avoid missing harmonics
 SNR_THRESHOLD = 1.5    # Minimum SNR in dB to consider a peak significant
+PEAK_HEIGHT_REL = 100  # relative height threshold (max - 100)
 
 # Harmonic Detection
 TOLERANCE = 0.1        # Tolerance for harmonic matching (e.g. 0.1 means +/- 10% drift allowed)
