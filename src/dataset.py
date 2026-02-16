@@ -73,10 +73,16 @@ class HarmonicDataset(Dataset):
         linear_vec = feature_extraction.extract_linear_features(best_candidate)
         gnn_data.linear_features = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0)
 
+        # Classifier Features: Comprehensive vector for Gradient Boosting
+        classifier_vec = feature_extraction.extract_classifier_features(best_track)
+        gnn_data.classifier_features = torch.tensor(classifier_vec, dtype=torch.float).unsqueeze(0)
+
         self.cache[idx] = gnn_data
         return gnn_data
 
     def _get_dummy(self, label):
         data = Data(x=torch.zeros((1,3)), edge_index=torch.zeros((2,0)), y=torch.tensor([label], dtype=torch.float))
         data.linear_features = torch.zeros(1, 20)
+        # 25 features: 5 global + 20 harmonic (10*2)
+        data.classifier_features = torch.zeros(1, 25)
         return data
