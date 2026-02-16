@@ -25,7 +25,7 @@ HARMONIC_MIN_POWER = -60.0 # Absolute power threshold (dB)
 MISSING_HARMONIC_PENALTY = 0.5 # Penalty multiplier for each missing low-order harmonic
 
 # Temporal Persistence
-PERSISTENCE_THRESHOLD = 3 # Minimum consecutive frames to consider a harmonic series valid
+PERSISTENCE_THRESHOLD = 1 # Minimum consecutive frames to consider a harmonic series valid
 PERSISTENCE_BUFFER = 5    # Max frames to look back for matching harmonic series (if intermittent)
 
 # Noise Estimation

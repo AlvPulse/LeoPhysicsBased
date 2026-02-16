@@ -8,12 +8,14 @@ from torch_geometric.data import Data, Batch
 from src import config, signal_processing, harmonic_detection, baseline_model, feature_extraction
 from src.models import LinearHarmonicModel, GNNEventDetector
 
-def process_file(filepath, linear_model, gnn_model, device):
+def process_file(filepath, linear_model, device):
     """
     Process a single file and return probabilities using persistence tracking.
     """
     # Load Audio
     audio, fs = signal_processing.load_audio(filepath)
+    if(len(audio)<config.N_FFT):
+        return None
     if audio is None: return None
 
     # 1. Compute STFT and Peaks
@@ -60,20 +62,20 @@ def process_file(filepath, linear_model, gnn_model, device):
             # --- METHOD 3: GNN ---
             # Build graph from the harmonics of the best candidate
             # This ensures we feed the GNN the same "clean" structure used in training
-            gnn_data = feature_extraction.build_gnn_data(best_candidate['harmonics'])
+    #         gnn_data = feature_extraction.build_gnn_data(best_candidate['harmonics'])
 
-            with torch.no_grad():
-                # Batch size 1
-                gnn_batch = Batch.from_data_list([gnn_data]).to(device)
-                gnn_prob = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
+    #         with torch.no_grad():
+    #             # Batch size 1
+    #             gnn_batch = Batch.from_data_list([gnn_data]).to(device)
+    #             gnn_prob = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
 
-    # If no tracks found, probs remain 0.0 (correct for noise files)
+    # # If no tracks found, probs remain 0.0 (correct for noise files)
 
     return {
         'filename': os.path.basename(filepath),
         'baseline_prob': baseline_prob,
         'linear_prob': linear_prob,
-        'gnn_prob': gnn_prob,
+        #'gnn_prob': gnn_prob,
         'base_freq': best_freq
     }
 
@@ -100,10 +102,10 @@ def main():
         linear_model.to(device)
         linear_model.eval()
 
-        gnn_model = GNNEventDetector()
-        gnn_model.load_state_dict(torch.load('models/gnn_model.pth', map_location=device))
-        gnn_model.to(device)
-        gnn_model.eval()
+        # gnn_model = GNNEventDetector()
+        # gnn_model.load_state_dict(torch.load('models/gnn_model.pth', map_location=device))
+        # gnn_model.to(device)
+        # gnn_model.eval()
     except Exception as e:
         print(f"Error loading models: {e}. Run train.py first.")
         # Proceeding without models might crash later, but user should have run train.
@@ -129,7 +131,7 @@ def main():
     }
 
     for fpath in all_files:
-        res = process_file(fpath, linear_model, gnn_model, device)
+        res = process_file(fpath, linear_model,  device)
         if res:
             is_yes = "yes" in fpath or "Autel" in fpath # Assuming Autel in debug_data/yes is YES
             label = "YES" if is_yes else "NO"
@@ -149,18 +151,18 @@ def main():
             elif not is_yes and p: metrics['Linear']['fp'] += 1
             elif not is_yes and not p: metrics['Linear']['tn'] += 1
 
-            # GNN
-            p = res['gnn_prob'] > 0.5
-            if is_yes and p: metrics['GNN']['tp'] += 1
-            elif is_yes and not p: metrics['GNN']['fn'] += 1
-            elif not is_yes and p: metrics['GNN']['fp'] += 1
-            elif not is_yes and not p: metrics['GNN']['tn'] += 1
+            # # GNN
+            # p = res['gnn_prob'] > 0.5
+            # if is_yes and p: metrics['GNN']['tp'] += 1
+            # elif is_yes and not p: metrics['GNN']['fn'] += 1
+            # elif not is_yes and p: metrics['GNN']['fp'] += 1
+            # elif not is_yes and not p: metrics['GNN']['tn'] += 1
 
             # Print
             # Print if incorrect or every 10th
-            is_correct_gnn = (res['gnn_prob'] > 0.5) == is_yes
-            if not is_correct_gnn or (metrics['GNN']['tp'] + metrics['GNN']['tn']) % 10 == 0:
-                print(f"{res['filename']:<25} | {res['baseline_prob']:<10.2f} | {res['linear_prob']:<10.2f} | {res['gnn_prob']:<10.2f} | {res['base_freq']:<10.1f} | {label}")
+            #is_correct_gnn = (res['gnn_prob'] > 0.5) == is_yes
+            # if not is_correct_gnn or (metrics['GNN']['tp'] + metrics['GNN']['tn']) % 10 == 0:
+            #     print(f"{res['filename']:<25} | {res['baseline_prob']:<10.2f} | {res['linear_prob']:<10.2f} | {res['gnn_prob']:<10.2f} | {res['base_freq']:<10.1f} | {label}")
 
     print("-" * 90)
 

@@ -230,7 +230,8 @@ def run_analysis():
             bt = tracks[0]
             if bt['start_frame'] <= frame_idx <= bt['last_seen']:
                 active_track = bt
-
+        
+        candidates = [] # Initialize candidates to prevent UnboundLocalError
         if active_track:
             # We want to show the harmonics for THIS frame, but track stores 'best_candidate' from BEST frame.
             # We can run detect_harmonics_iterative for this frame's peaks to find the matching candidate.
@@ -313,13 +314,13 @@ def run_analysis():
         # --- METHOD 3: GNN ---
         with torch.no_grad():
             gnn_batch = Batch.from_data_list([Data(x=x, edge_index=edge_index)]).to(device)
-            score3 = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
+        #    score3 = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
 
         # Update Plots
         history_t.append(current_time)
         prob1_y.append(score1)
         prob2_y.append(score2)
-        prob3_y.append(score3)
+       # prob3_y.append(score3)
 
         line_prob1.set_data(history_t, prob1_y)
         line_prob2.set_data(history_t, prob2_y)
