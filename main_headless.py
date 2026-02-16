@@ -2,13 +2,16 @@ import numpy as np
 import torch
 import os
 import glob
+import joblib
+import xgboost as xgb
 from torch_geometric.data import Data, Batch
 
 # Import modules
 from src import config, signal_processing, harmonic_detection, baseline_model, feature_extraction
-from src.models import LinearHarmonicModel, GNNEventDetector
+from src.models import LinearHarmonicModel
+# GNNEventDetector removed
 
-def process_file(filepath, linear_model, gnn_model, device):
+def process_file(filepath, linear_model, clf, device):
     """
     Process a single file and return probabilities using persistence tracking.
     """
@@ -25,7 +28,7 @@ def process_file(filepath, linear_model, gnn_model, device):
     # Default values (assume NO event)
     baseline_prob = 0.0
     linear_prob = 0.0
-    gnn_prob = 0.0
+    clf_prob = 0.0
     best_freq = 0.0
 
     if tracks:
@@ -57,15 +60,11 @@ def process_file(filepath, linear_model, gnn_model, device):
                 lin_input = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0).to(device)
                 linear_prob = torch.sigmoid(linear_model(lin_input)).item()
 
-            # --- METHOD 3: GNN ---
-            # Build graph from the harmonics of the best candidate
-            # This ensures we feed the GNN the same "clean" structure used in training
-            gnn_data = feature_extraction.build_gnn_data(best_candidate['harmonics'])
-
-            with torch.no_grad():
-                # Batch size 1
-                gnn_batch = Batch.from_data_list([gnn_data]).to(device)
-                gnn_prob = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
+            # --- METHOD 3: CLASSIFIER (XGBoost) ---
+            classifier_vec = feature_extraction.extract_classifier_features(best_track)
+            # Sklearn/XGBoost expects (N_samples, N_features)
+            # classifier_vec is 1D, so reshape to (1, -1)
+            clf_prob = clf.predict_proba(classifier_vec.reshape(1, -1))[0][1]
 
     # If no tracks found, probs remain 0.0 (correct for noise files)
 
@@ -73,7 +72,7 @@ def process_file(filepath, linear_model, gnn_model, device):
         'filename': os.path.basename(filepath),
         'baseline_prob': baseline_prob,
         'linear_prob': linear_prob,
-        'gnn_prob': gnn_prob,
+        'clf_prob': clf_prob,
         'base_freq': best_freq
     }
 
@@ -100,10 +99,9 @@ def main():
         linear_model.to(device)
         linear_model.eval()
 
-        gnn_model = GNNEventDetector()
-        gnn_model.load_state_dict(torch.load('models/gnn_model.pth', map_location=device))
-        gnn_model.to(device)
-        gnn_model.eval()
+        # Load Sklearn/XGBoost Model
+        clf = joblib.load('models/classifier_model.pkl')
+
     except Exception as e:
         print(f"Error loading models: {e}. Run train.py first.")
         # Proceeding without models might crash later, but user should have run train.
@@ -118,18 +116,18 @@ def main():
     all_files = yes_files + no_files + debug_files
 
     print(f"Found {len(all_files)} files.")
-    print(f"{'Filename':<25} | {'Base(H)':<10} | {'Linear':<10} | {'GNN':<10} | {'Freq (Hz)':<10} | {'True Label'}")
+    print(f"{'Filename':<25} | {'Base(H)':<10} | {'Linear':<10} | {'Classif':<10} | {'Freq (Hz)':<10} | {'True Label'}")
     print("-" * 90)
 
     # Metrics Accumulators
     metrics = {
         'Baseline': {'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0},
         'Linear': {'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0},
-        'GNN': {'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0},
+        'Classifier': {'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0},
     }
 
     for fpath in all_files:
-        res = process_file(fpath, linear_model, gnn_model, device)
+        res = process_file(fpath, linear_model, clf, device)
         if res:
             is_yes = "yes" in fpath or "Autel" in fpath # Assuming Autel in debug_data/yes is YES
             label = "YES" if is_yes else "NO"
@@ -149,18 +147,18 @@ def main():
             elif not is_yes and p: metrics['Linear']['fp'] += 1
             elif not is_yes and not p: metrics['Linear']['tn'] += 1
 
-            # GNN
-            p = res['gnn_prob'] > 0.5
-            if is_yes and p: metrics['GNN']['tp'] += 1
-            elif is_yes and not p: metrics['GNN']['fn'] += 1
-            elif not is_yes and p: metrics['GNN']['fp'] += 1
-            elif not is_yes and not p: metrics['GNN']['tn'] += 1
+            # Classifier
+            p = res['clf_prob'] > 0.5
+            if is_yes and p: metrics['Classifier']['tp'] += 1
+            elif is_yes and not p: metrics['Classifier']['fn'] += 1
+            elif not is_yes and p: metrics['Classifier']['fp'] += 1
+            elif not is_yes and not p: metrics['Classifier']['tn'] += 1
 
             # Print
             # Print if incorrect or every 10th
-            is_correct_gnn = (res['gnn_prob'] > 0.5) == is_yes
-            if not is_correct_gnn or (metrics['GNN']['tp'] + metrics['GNN']['tn']) % 10 == 0:
-                print(f"{res['filename']:<25} | {res['baseline_prob']:<10.2f} | {res['linear_prob']:<10.2f} | {res['gnn_prob']:<10.2f} | {res['base_freq']:<10.1f} | {label}")
+            is_correct_clf = (res['clf_prob'] > 0.5) == is_yes
+            if not is_correct_clf or (metrics['Classifier']['tp'] + metrics['Classifier']['tn']) % 10 == 0:
+                print(f"{res['filename']:<25} | {res['baseline_prob']:<10.2f} | {res['linear_prob']:<10.2f} | {res['clf_prob']:<10.2f} | {res['base_freq']:<10.1f} | {label}")
 
     print("-" * 90)
 
