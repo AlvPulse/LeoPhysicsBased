@@ -1,120 +1,266 @@
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch_geometric.loader import DataLoader
-from src.dataset import HarmonicDataset
-from src.models import LinearHarmonicModel, GNNEventDetector
-from src import config
-import os
+import json
+import random
 import numpy as np
+from torch_geometric.loader import DataLoader as GeoDataLoader
+from src import dataset, harmonic_detection, models, config, signal_processing
 
-def train():
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+# Set device
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    dataset = HarmonicDataset(root_dir='data')
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
-    # Calculate Class Weights
-    y_labels = np.array(dataset.labels)
-    n_pos = np.sum(y_labels == 1.0)
-    n_neg = np.sum(y_labels == 0.0)
+def evaluate_model(model, loader):
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for batch in loader:
+            batch = batch.to(device)
+            if isinstance(model, models.LinearHarmonicModel):
+                # Linear model uses linear_x
+                outputs = model(batch.linear_x)
+            else:
+                # GNN model uses graph data
+                outputs = model(batch.x, batch.edge_index, batch.batch)
 
-    # Weight = Number of Negatives / Number of Positives
-    # If n_pos is 0, default to 1
-    weight_val = n_neg / n_pos if n_pos > 0 else 1.0
-    pos_weight = torch.tensor([weight_val], dtype=torch.float).to(device)
-    print(f"Class Distribution: YES={n_pos}, NO={n_neg}, Pos Weight={weight_val:.2f}")
+            # Outputs are logits. Sigmoid > 0.5 is equivalent to Logits > 0
+            predicted = (outputs > 0.0).float()
+            correct += (predicted == batch.y.unsqueeze(1)).sum().item()
+            total += batch.y.size(0)
 
-    # Validation Split
-    train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+    return correct / total if total > 0 else 0.0
 
-    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False)
+def get_subset_file_and_label(dataset_obj, idx):
+    """Helper to get file path and label from a Subset or Dataset."""
+    if isinstance(dataset_obj, torch.utils.data.Subset):
+        real_idx = dataset_obj.indices[idx]
+        return dataset_obj.dataset.file_list[real_idx], dataset_obj.dataset.labels[real_idx]
+    else:
+        return dataset_obj.file_list[idx], dataset_obj.labels[idx]
 
-    print(f"Training on {len(train_dataset)} samples, Validating on {len(val_dataset)} samples")
+def random_search_optimization(train_dataset, val_dataset, num_iterations=10):
+    best_acc = 0.0
+    best_params = {}
 
-    linear_model = LinearHarmonicModel().to(device)
-    gnn_model = GNNEventDetector().to(device)
+    print(f"Starting Random Search Optimization ({num_iterations} iterations)...")
 
-    opt_linear = optim.Adam(linear_model.parameters(), lr=config.LEARNING_RATE)
-    opt_gnn = optim.Adam(gnn_model.parameters(), lr=config.LEARNING_RATE)
+    # Pre-select a fixed subset of indices for validation speed
+    train_subset_indices = random.sample(range(len(train_dataset)), min(20, len(train_dataset)))
+    val_subset_indices = random.sample(range(len(val_dataset)), min(20, len(val_dataset)))
 
+    for i in range(num_iterations):
+        # 1. Sample Hyperparameters
+        params = {
+            'tolerance': random.uniform(0.05, 0.25),
+            'snr_threshold': random.uniform(1.0, 8.0),
+            'power_threshold': random.uniform(-80.0, -40.0),
+            'weights': [random.uniform(0.1, 1.0) for _ in range(3)] # [w_snr, w_pwr, w_drift]
+        }
+
+        # 2. Extract Features with these params
+        train_features = []
+        train_labels = []
+
+        for idx in train_subset_indices:
+            filepath, label = get_subset_file_and_label(train_dataset, idx)
+
+            # Load & Process
+            audio, fs = signal_processing.load_audio(filepath)
+            if audio is None: continue
+
+            f, psd_db = signal_processing.compute_psd(audio, fs)
+            nf = signal_processing.estimate_noise_floor(psd_db)
+            peaks = signal_processing.find_significant_peaks(f, psd_db, nf)
+
+            # Use CUSTOM params
+            candidates = harmonic_detection.detect_harmonics_iterative(peaks, config_params=params)
+            feats = harmonic_detection.extract_linear_features(candidates)
+
+            train_features.append(feats)
+            train_labels.append(label)
+
+        if not train_features: continue
+
+        X = torch.tensor(np.array(train_features), dtype=torch.float).to(device)
+        y = torch.tensor(np.array(train_labels), dtype=torch.float).unsqueeze(1).to(device)
+
+        # 3. Train Small Linear Model
+        model = models.LinearHarmonicModel().to(device)
+        optimizer = optim.Adam(model.parameters(), lr=0.01)
+        # Use BCEWithLogitsLoss
+        pos_weight = None # For small subset optimization, keep simple
+        criterion = nn.BCEWithLogitsLoss()
+
+        model.train()
+        for _ in range(20): # Increased epochs for better convergence
+            optimizer.zero_grad()
+            outputs = model(X)
+            loss = criterion(outputs, y)
+            loss.backward()
+            optimizer.step()
+
+        # 4. Evaluate on Validation Subset
+        val_correct = 0
+        val_total = 0
+        model.eval()
+        with torch.no_grad():
+             for idx in val_subset_indices:
+                filepath, label = get_subset_file_and_label(val_dataset, idx)
+
+                audio, fs = signal_processing.load_audio(filepath)
+                if audio is None: continue
+                f, psd_db = signal_processing.compute_psd(audio, fs)
+                nf = signal_processing.estimate_noise_floor(psd_db)
+                peaks = signal_processing.find_significant_peaks(f, psd_db, nf)
+
+                candidates = harmonic_detection.detect_harmonics_iterative(peaks, config_params=params)
+                feats = harmonic_detection.extract_linear_features(candidates)
+
+                input_tensor = torch.tensor(feats, dtype=torch.float).unsqueeze(0).to(device)
+                pred_logits = model(input_tensor)
+                predicted = (pred_logits > 0.0).float().item()
+                if predicted == label:
+                    val_correct += 1
+                val_total += 1
+
+        val_acc = val_correct / val_total if val_total > 0 else 0
+
+        print(f"Iter {i+1}: Acc={val_acc:.2f} | Params={params}")
+
+        if val_acc > best_acc:
+            best_acc = val_acc
+            best_params = params
+
+    print(f"Best Params found: Acc={best_acc:.2f}")
+    if not best_params: # Fallback if no improvement
+         print("No params found (acc=0), using defaults.")
+         best_params = {
+            'tolerance': config.TOLERANCE,
+            'snr_threshold': config.HARMONIC_MIN_SNR,
+            'power_threshold': config.HARMONIC_MIN_POWER,
+            'weights': config.QUALITY_WEIGHTS
+         }
+    return best_params
+
+def train_final_models(train_loader, val_loader, pos_weight=None):
+    print("Training Final Models...")
+    if pos_weight is not None:
+        print(f"Using pos_weight: {pos_weight.item():.2f}")
+
+    # LINEAR MODEL
+    linear_model = models.LinearHarmonicModel().to(device)
+    optimizer = optim.Adam(linear_model.parameters(), lr=0.001)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    for epoch in range(config.EPOCHS):
+    print("Training Linear Model...")
+    for epoch in range(20):
         linear_model.train()
-        gnn_model.train()
-
-        train_loss_lin = 0
-        train_loss_gnn = 0
-        train_acc_lin = 0
-        train_acc_gnn = 0
-
+        total_loss = 0
         for batch in train_loader:
             batch = batch.to(device)
-            labels = batch.y.unsqueeze(1)
+            optimizer.zero_grad()
+            outputs = linear_model(batch.linear_x)
+            loss = criterion(outputs, batch.y.unsqueeze(1))
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
 
-            # Linear Train
-            lin_feat = batch.linear_features
-            if lin_feat.dim() == 3: lin_feat = lin_feat.squeeze(1)
+        val_acc = evaluate_model(linear_model, val_loader)
+        if (epoch+1) % 5 == 0:
+            print(f"Epoch {epoch+1}: Loss={total_loss:.4f}, Val Acc={val_acc:.2f}")
 
-            opt_linear.zero_grad()
-            out_linear = linear_model(lin_feat)
-            loss_linear = criterion(out_linear, labels)
-            loss_linear.backward()
-            opt_linear.step()
+    # GNN MODEL
+    gnn_model = models.GNNEventDetector().to(device)
+    optimizer = optim.Adam(gnn_model.parameters(), lr=0.001)
 
-            train_loss_lin += loss_linear.item()
-            train_acc_lin += ((out_linear > 0) == labels).sum().item()
+    print("Training GNN Model...")
+    for epoch in range(20):
+        gnn_model.train()
+        total_loss = 0
+        for batch in train_loader:
+            batch = batch.to(device)
+            optimizer.zero_grad()
+            outputs = gnn_model(batch.x, batch.edge_index, batch.batch)
+            loss = criterion(outputs, batch.y.unsqueeze(1))
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
 
-            # GNN Train
-            opt_gnn.zero_grad()
-            out_gnn = gnn_model(batch.x, batch.edge_index, batch.batch)
-            loss_gnn = criterion(out_gnn, labels)
-            loss_gnn.backward()
-            opt_gnn.step()
+        val_acc = evaluate_model(gnn_model, val_loader)
+        if (epoch+1) % 5 == 0:
+            print(f"Epoch {epoch+1}: Loss={total_loss:.4f}, Val Acc={val_acc:.2f}")
 
-            train_loss_gnn += loss_gnn.item()
-            train_acc_gnn += ((out_gnn > 0) == labels).sum().item()
+    return linear_model, gnn_model
 
-        # Validation
-        linear_model.eval()
-        gnn_model.eval()
+def calculate_pos_weight(dataset_subset):
+    num_pos = 0
+    total = len(dataset_subset)
+    indices = dataset_subset.indices
+    labels = dataset_subset.dataset.labels
 
-        val_acc_lin = 0
-        val_acc_gnn = 0
+    for idx in indices:
+        if labels[idx] == 1:
+            num_pos += 1
 
-        with torch.no_grad():
-            for batch in val_loader:
-                batch = batch.to(device)
-                labels = batch.y.unsqueeze(1)
+    num_neg = total - num_pos
+    if num_pos > 0:
+        return torch.tensor([num_neg / num_pos], device=device)
+    return None
 
-                lin_feat = batch.linear_features
-                if lin_feat.dim() == 3: lin_feat = lin_feat.squeeze(1)
+def main():
+    set_seed()
 
-                out_linear = linear_model(lin_feat)
-                val_acc_lin += ((out_linear > 0) == labels).sum().item()
+    # 1. Load Dataset
+    print("Loading Datasets...")
+    full_dataset = dataset.HarmonicDataset(mode='train', split_ratio=0.8)
+    if len(full_dataset) == 0:
+        print("Dataset is empty. Run generate_data.py first.")
+        return
 
-                out_gnn = gnn_model(batch.x, batch.edge_index, batch.batch)
-                val_acc_gnn += ((out_gnn > 0) == labels).sum().item()
+    train_size = int(0.8 * len(full_dataset))
+    val_size = len(full_dataset) - train_size
+    train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
 
-        # Metrics
-        t_acc_lin = train_acc_lin / len(train_dataset)
-        t_acc_gnn = train_acc_gnn / len(train_dataset)
-        v_acc_lin = val_acc_lin / len(val_dataset)
-        v_acc_gnn = val_acc_gnn / len(val_dataset)
+    # Calculate pos_weight for imbalanced learning
+    pos_weight = calculate_pos_weight(train_dataset)
 
-        print(f"Epoch {epoch+1:02d} | "
-              f"Linear (Train/Val Acc): {t_acc_lin:.2f}/{v_acc_lin:.2f} | "
-              f"GNN (Train/Val Acc): {t_acc_gnn:.2f}/{v_acc_gnn:.2f}")
+    # 2. Hyperparameter Optimization
+    best_params = random_search_optimization(train_dataset, val_dataset, num_iterations=10)
 
-    # Save
-    if not os.path.exists('models'): os.makedirs('models')
+    # Save Best Params
+    if not os.path.exists('models'):
+        os.makedirs('models')
+    with open('models/best_config.json', 'w') as f:
+        json.dump(best_params, f, indent=4)
+    print("Saved best_config.json")
+
+    # 3. Apply Best Params to Global Config
+    print("Applying optimized parameters...")
+    if 'tolerance' in best_params: config.TOLERANCE = best_params['tolerance']
+    if 'snr_threshold' in best_params: config.HARMONIC_MIN_SNR = best_params['snr_threshold']
+    if 'power_threshold' in best_params: config.HARMONIC_MIN_POWER = best_params['power_threshold']
+    if 'weights' in best_params: config.QUALITY_WEIGHTS = best_params['weights']
+
+    # 4. Prepare DataLoaders
+    train_loader = GeoDataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
+    val_loader = GeoDataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False)
+
+    # 5. Train Final Models
+    linear_model, gnn_model = train_final_models(train_loader, val_loader, pos_weight=pos_weight)
+
+    # Save Models
     torch.save(linear_model.state_dict(), 'models/linear_model.pth')
     torch.save(gnn_model.state_dict(), 'models/gnn_model.pth')
-    print("Models saved.")
+    print("Saved models to models/")
 
 if __name__ == "__main__":
-    train()
+    main()

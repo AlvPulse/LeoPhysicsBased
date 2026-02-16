@@ -1,260 +1,244 @@
+import os
+import json
+import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import torch
-from matplotlib.animation import FuncAnimation
-import os
+from scipy.io import wavfile
+from scipy import signal
 import argparse
-from torch_geometric.data import Data, Batch
 
-# Import modules
-from src import config, signal_processing, harmonic_detection, baseline_model, feature_extraction
-from src.models import LinearHarmonicModel, GNNEventDetector
+from src import config, signal_processing, harmonic_detection, models
 
-def run_analysis():
-    parser = argparse.ArgumentParser(description='Harmonic Event Detector - Visualization')
-    parser.add_argument('filename', nargs='?', default='data/yes/sample_001.wav', help='Path to WAV file')
+# ==========================================
+# ⚙️ CONFIGURATION
+# ==========================================
+FILENAME = 'data/yes/sample_000.wav' # Default file
+WINDOW_DURATION = config.WINDOW_DURATION
+STEP_SIZE = config.STEP_SIZE
 
-    args = parser.parse_args()
-    FILENAME = args.filename
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    if not os.path.exists(FILENAME):
-        print(f"File not found: {FILENAME}")
-        return
-
-    print(f"Analyzing {FILENAME}...")
+def load_models():
+    # Load Config
+    if os.path.exists('models/best_config.json'):
+        with open('models/best_config.json', 'r') as f:
+            params = json.load(f)
+            print(f"Loaded optimized params: {params}")
+            if 'tolerance' in params: config.TOLERANCE = params['tolerance']
+            if 'snr_threshold' in params: config.HARMONIC_MIN_SNR = params['snr_threshold']
+            if 'power_threshold' in params: config.HARMONIC_MIN_POWER = params['power_threshold']
+            if 'weights' in params: config.QUALITY_WEIGHTS = params['weights']
+    else:
+        print("Using default config.")
 
     # Load Models
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    try:
-        linear_model = LinearHarmonicModel()
-        linear_model.load_state_dict(torch.load('models/linear_model.pth', map_location=device))
-        linear_model.to(device)
-        linear_model.eval()
+    linear_model = models.LinearHarmonicModel().to(device)
+    gnn_model = models.GNNEventDetector().to(device)
 
-        gnn_model = GNNEventDetector()
-        gnn_model.load_state_dict(torch.load('models/gnn_model.pth', map_location=device))
-        gnn_model.to(device)
-        gnn_model.eval()
-    except Exception as e:
-        print(f"Error loading models: {e}. Ensure you ran train.py.")
-        return
+    if os.path.exists('models/linear_model.pth'):
+        try:
+            linear_model.load_state_dict(torch.load('models/linear_model.pth', map_location=device))
+            linear_model.eval()
+        except RuntimeError as e:
+            print(f"Warning: Could not load linear_model.pth (architecture mismatch?): {e}")
+    else:
+        print("Warning: linear_model.pth not found")
+
+    if os.path.exists('models/gnn_model.pth'):
+        try:
+            gnn_model.load_state_dict(torch.load('models/gnn_model.pth', map_location=device))
+            gnn_model.eval()
+        except RuntimeError as e:
+            print(f"Warning: Could not load gnn_model.pth (architecture mismatch?): {e}")
+    else:
+        print("Warning: gnn_model.pth not found")
+
+    return linear_model, gnn_model
+
+def run_analysis(filename=None, output_image='analysis_result.png'):
+    if filename is None:
+        filename = FILENAME
+
+    if not os.path.exists(filename):
+        # Try finding any wav file in data/yes
+        if os.path.exists('data/yes'):
+            files = [f for f in os.listdir('data/yes') if f.endswith('.wav')]
+            if files:
+                filename = os.path.join('data/yes', files[0])
+            else:
+                print("No wav files found.")
+                return
+        else:
+             print(f"File {filename} not found.")
+             return
+
+    print(f"Analyzing {filename}...")
+    linear_model, gnn_model = load_models()
 
     # Load Audio
-    audio, fs = signal_processing.load_audio(FILENAME)
-    if audio is None: return
+    fs, audio = wavfile.read(filename)
+    if len(audio.shape) > 1: audio = audio[:, 0]
+    audio = audio.astype(np.float32)
+    # Normalize
+    audio /= np.max(np.abs(audio))
 
     duration = len(audio) / fs
+    if duration < WINDOW_DURATION:
+        print(f"Warning: File duration {duration:.2f}s is shorter than window {WINDOW_DURATION}s.")
+        return
 
-    # 1. Compute STFT and Peaks (Full File)
-    print("Computing STFT and Peaks...")
-    f, t, Pxx_db, peaks_per_frame = signal_processing.compute_spectrogram_and_peaks(audio, fs)
+    frames = int((duration - WINDOW_DURATION) / STEP_SIZE) + 1
 
-    # 2. Track Harmonics (Persistence)
-    print("Tracking Harmonics...")
-    tracks = harmonic_detection.track_harmonics(peaks_per_frame, t)
+    history = {
+        't': [],
+        'p_base': [],
+        'p_lin': [],
+        'p_gnn': [],
+        'best_harmonics': [] # List of best harmonic series per frame
+    }
 
-    # 3. Calculate Probabilities Time Series
-    num_frames = len(t)
-    prob_baseline = np.zeros(num_frames)
-    prob_linear = np.zeros(num_frames)
-    prob_gnn = np.zeros(num_frames)
+    print(f"Processing {frames} frames...")
 
-    # Map tracks to time series
-    # We only visualize the BEST track's probability for simplicity,
-    # or we could sum/max them if multiple exist (though rare with current logic).
-    if tracks:
-        # Sort tracks by score (descending)
-        tracks.sort(key=lambda x: x['max_score'], reverse=True)
-        best_track = tracks[0]
-        start_frame = best_track['start_frame']
-        end_frame = best_track['last_seen']
+    for frame in range(frames):
+        start_t = frame * STEP_SIZE
+        end_t = start_t + WINDOW_DURATION
 
-        # Get peaks from best snapshot
-        best_frame_idx = best_track.get('best_frame_idx', 0)
-        best_peaks = peaks_per_frame[best_frame_idx] if best_frame_idx < len(peaks_per_frame) else []
+        # Slice Audio
+        s_idx, e_idx = int(start_t*fs), int(end_t*fs)
+        slice_audio = audio[s_idx:e_idx]
+        if len(slice_audio) < 2048: continue
 
-        # Calculate scores
-        score1, _ = baseline_model.detect_baseline_heuristic(best_peaks)
+        # 1. Signal Processing
+        f, psd_db = signal_processing.compute_psd(slice_audio, fs)
+        nf = signal_processing.estimate_noise_floor(psd_db)
+        peaks = signal_processing.find_significant_peaks(f, psd_db, nf)
 
-        # Retrieve Best Candidate Snapshot
-        best_candidate = best_track.get('best_candidate')
+        # 2. Harmonic Detection
+        candidates = harmonic_detection.detect_harmonics_iterative(peaks)
+        best_cand = candidates[0] if candidates else None
 
-        score2 = 0.0
-        score3 = 0.0
+        # 3. Model Inference
+        # Baseline Score (Normalized)
+        score_base = 0.0
+        if best_cand:
+            score_base = min(best_cand['score'] / 5.0, 1.0)
 
-        if best_candidate:
-            # Linear Model
-            linear_vec = feature_extraction.extract_linear_features(best_candidate)
-            with torch.no_grad():
-                lin_input = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0).to(device)
-                score2 = torch.sigmoid(linear_model(lin_input)).item()
+        # Linear Model
+        feat_vec = harmonic_detection.extract_linear_features(candidates)
+        feat_tensor = torch.tensor(feat_vec, dtype=torch.float).unsqueeze(0).to(device)
+        with torch.no_grad():
+            prob_lin = torch.sigmoid(linear_model(feat_tensor)).item()
 
-            # GNN Model
-            gnn_data = feature_extraction.build_gnn_data(best_candidate['harmonics'])
-            with torch.no_grad():
-                gnn_batch = Batch.from_data_list([gnn_data]).to(device)
-                score3 = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
+        # GNN Model
+        node_feats = []
+        if not peaks:
+            node_feats = [[0.0, 0.0, 0.0]]
+            edge_index = torch.tensor([[0], [0]], dtype=torch.long)
+        else:
+            for p in peaks:
+                f_norm = p['freq'] / config.MAX_FREQ
+                snr_norm = min(max(p['snr'], 0), 50) / 50.0
+                pwr_norm = min(max(p['power'] + 100, 0), 100) / 100.0
+                node_feats.append([f_norm, snr_norm, pwr_norm])
 
-        # Assign to time series
-        # We fill from start to end of the track
-        prob_baseline[start_frame:end_frame+1] = score1
-        prob_linear[start_frame:end_frame+1] = score2
-        prob_gnn[start_frame:end_frame+1] = score3
+            edge_index = []
+            num_nodes = len(node_feats)
+            for i in range(num_nodes):
+                for j in range(num_nodes):
+                    if i != j: edge_index.append([i, j])
+            if not edge_index: edge_index = [[0], [0]]
+            edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
 
-        print(f"Best Track Found: {best_track['freq']:.1f}Hz, Frames {start_frame}-{end_frame}, Score: {best_track['max_score']:.2f}")
+        x = torch.tensor(node_feats, dtype=torch.float).to(device)
+        edge_index = edge_index.to(device)
+        batch = torch.zeros(len(node_feats), dtype=torch.long).to(device)
 
-    # --- Setup Plots ---
-    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
-    fig.canvas.manager.set_window_title('Harmonic Event Detector - Multi-Model Comparison')
-    plt.subplots_adjust(hspace=0.3, wspace=0.15)
+        with torch.no_grad():
+            prob_gnn = torch.sigmoid(gnn_model(x, edge_index, batch)).item()
 
-    # 1. Probability History Plot
-    ax_prob = axes[0, 0]
-    line_prob1, = ax_prob.plot([], [], color='green', lw=2, label='Baseline (Heuristic)')
-    line_prob2, = ax_prob.plot([], [], color='blue', lw=2, label='Linear Model')
-    line_prob3, = ax_prob.plot([], [], color='red', lw=2, label='GNN Model')
+        # Update History
+        history['t'].append(start_t + WINDOW_DURATION/2)
+        history['p_base'].append(score_base)
+        history['p_lin'].append(prob_lin)
+        history['p_gnn'].append(prob_gnn)
 
-    ax_prob.set_title("Event Probability (Persistent Tracks)", fontweight='bold')
-    ax_prob.set_ylim(-0.1, 1.1)
-    ax_prob.set_xlim(0, duration)
-    ax_prob.set_ylabel("Probability")
-    ax_prob.set_xlabel("Time (s)")
-    ax_prob.grid(True, alpha=0.3)
-    ax_prob.legend(loc='upper right')
+        # Store best harmonic info for visualization later (e.g., specific frame)
+        history['best_harmonics'].append(best_cand)
 
-    # 2. Spectrogram
-    ax_spec = axes[0, 1]
-    # Pxx_db is (Freq, Time). t is time array. f is freq array.
-    # pcolormesh needs coordinates for corners, so we might need to adjust shapes or assume centers.
-    # shading='gouraud' usually handles it well.
-    c = ax_spec.pcolormesh(t, f, Pxx_db, shading='gouraud', cmap='inferno')
-    cursor_line = ax_spec.axvline(x=0, color='cyan', linestyle='--')
-    ax_spec.set_title("Spectrogram", fontweight='bold')
+    # --- Generate Static Report ---
+    print("Generating report...")
+    fig = plt.figure(figsize=(12, 12))
+    gs = fig.add_gridspec(3, 2)
+
+    # 1. Spectrogram
+    ax_spec = fig.add_subplot(gs[0, :])
+    f_spec, t_spec, Sxx = signal.spectrogram(audio, fs, nperseg=1024)
+    Sxx_db = 10 * np.log10(Sxx + 1e-10)
+    ax_spec.pcolormesh(t_spec, f_spec, Sxx_db, shading='gouraud', cmap='inferno')
+    ax_spec.set_title(f"Spectrogram: {os.path.basename(filename)}")
     ax_spec.set_ylabel("Freq (Hz)")
-    ax_spec.set_ylim(0, config.MAX_FREQ * 1.2)
-    # plt.colorbar(c, ax=ax_spec)
+    ax_spec.set_xlabel("Time (s)")
 
-    # 3. PSD Curve (Instantaneous)
-    ax_psd = axes[1, 0]
-    line_psd, = ax_psd.plot([], [], color='navy', lw=1.5, label='Instantaneous PSD')
-    line_nf, = ax_psd.plot([], [], color='gray', linestyle='--', alpha=0.7, label='Noise Floor')
-    scatter_peaks = ax_psd.scatter([], [], color='red', s=50, zorder=5, label='Peaks')
-    scatter_harmonics = ax_psd.scatter([], [], color='lime', s=80, marker='*', zorder=10, label='Tracked Harmonics')
+    # 2. Probability History
+    ax_prob = fig.add_subplot(gs[1, :])
+    ax_prob.plot(history['t'], history['p_base'], label='Baseline', color='green', alpha=0.7)
+    ax_prob.plot(history['t'], history['p_lin'], label='Linear Model', color='blue', alpha=0.7)
+    ax_prob.plot(history['t'], history['p_gnn'], label='GNN Model', color='red', alpha=0.7)
+    ax_prob.set_title("Event Probability over Time")
+    ax_prob.set_ylabel("Probability")
+    ax_prob.set_ylim(-0.1, 1.1)
+    ax_prob.legend()
+    ax_prob.grid(True, alpha=0.3)
 
-    ax_psd.set_title("Instantaneous PSD & Detections", fontweight='bold')
+    # 3. Snapshot of Peak Detection (Middle of the file or highest probability frame)
+    # Find frame with max GNN probability
+    best_frame_idx = np.argmax(history['p_gnn']) if history['p_gnn'] else 0
+    t_snapshot = history['t'][best_frame_idx]
+
+    # Re-process that frame to get PSD
+    start_t = t_snapshot - WINDOW_DURATION/2
+    end_t = start_t + WINDOW_DURATION
+    s_idx, e_idx = int(start_t*fs), int(end_t*fs)
+    slice_audio = audio[s_idx:e_idx]
+    f_snap, psd_snap = signal_processing.compute_psd(slice_audio, fs)
+    nf_snap = signal_processing.estimate_noise_floor(psd_snap)
+
+    ax_psd = fig.add_subplot(gs[2, 0])
+    ax_psd.plot(f_snap, psd_snap, color='navy', lw=1, label='PSD')
+    ax_psd.plot(f_snap, nf_snap, color='gray', linestyle='--', label='Noise Floor')
+
+    # Get stored candidate for this frame
+    cand = history['best_harmonics'][best_frame_idx]
+    if cand:
+        h_f = [h['freq'] for h in cand['harmonics']]
+        h_p = [h.get('peak_power', h['power']) for h in cand['harmonics']]
+        ax_psd.scatter(h_f, h_p, color='lime', marker='*', s=100, zorder=5, label='Harmonics')
+
+    ax_psd.set_title(f"Snapshot at t={t_snapshot:.2f}s (Max Prob)")
     ax_psd.set_xlim(0, config.MAX_FREQ)
-    ax_psd.set_ylim(-100, 0) # Fixed range
-    ax_psd.grid(alpha=0.3)
-    ax_psd.legend(loc='upper right')
+    ax_psd.legend()
 
-    # 4. LIVE TABLE
-    ax_table = axes[1, 1]
-    ax_table.axis('off')
-    ax_table.set_title(f"Harmonic Analysis (Best Candidate)", fontweight='bold')
+    # 4. Text Summary
+    ax_text = fig.add_subplot(gs[2, 1])
+    ax_text.axis('off')
+    summary_text = (
+        f"File: {os.path.basename(filename)}\n"
+        f"Duration: {duration:.2f}s\n\n"
+        f"Max Prob (GNN): {max(history['p_gnn']):.4f}\n"
+        f"Max Prob (Linear): {max(history['p_lin']):.4f}\n"
+        f"Max Prob (Base): {max(history['p_base']):.4f}\n\n"
+        f"Avg Prob (GNN): {np.mean(history['p_gnn']):.4f}\n"
+    )
+    ax_text.text(0.1, 0.5, summary_text, fontsize=12, va='center')
 
-    col_labels = ["Harmonic", "Freq (Hz)", "Power (dB)", "SNR (dB)"]
-    table_data = [["-", "-", "-", "-"] for _ in range(10)]
-    the_table = ax_table.table(cellText=table_data, colLabels=col_labels, loc='center', cellLoc='center')
-    the_table.auto_set_font_size(False)
-    the_table.set_fontsize(10)
-    the_table.scale(1, 1.5)
-
-    def init():
-        line_prob1.set_data([], [])
-        line_prob2.set_data([], [])
-        line_prob3.set_data([], [])
-        line_psd.set_data([], [])
-        line_nf.set_data([], [])
-        scatter_peaks.set_offsets(np.empty((0, 2)))
-        scatter_harmonics.set_offsets(np.empty((0, 2)))
-        cursor_line.set_xdata([0])
-        return line_prob1, line_prob2, line_prob3, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line
-
-    def update(frame_idx):
-        if frame_idx >= len(t): return init()
-
-        current_time = t[frame_idx]
-
-        # Update Probabilities (History up to now)
-        # We plot the pre-calculated curves up to current_time
-        valid_indices = t <= current_time
-        line_prob1.set_data(t[valid_indices], prob_baseline[valid_indices])
-        line_prob2.set_data(t[valid_indices], prob_linear[valid_indices])
-        line_prob3.set_data(t[valid_indices], prob_gnn[valid_indices])
-
-        # Update Spectrogram Cursor
-        cursor_line.set_xdata([current_time])
-
-        # Update PSD
-        psd_frame = Pxx_db[:, frame_idx]
-        nf_frame = signal_processing.estimate_noise_floor(psd_frame)
-        peaks = peaks_per_frame[frame_idx]
-
-        line_psd.set_data(f, psd_frame)
-        line_nf.set_data(f, nf_frame)
-
-        if peaks:
-            pf = [p['freq'] for p in peaks]
-            pp = [p['power'] for p in peaks]
-            scatter_peaks.set_offsets(np.c_[pf, pp])
-        else:
-            scatter_peaks.set_offsets(np.empty((0, 2)))
-
-        # Update Harmonics & Table
-        # Check if we are inside a track
-        active_track = None
-        if tracks:
-            # Simple check for the best track
-            bt = tracks[0]
-            if bt['start_frame'] <= frame_idx <= bt['last_seen']:
-                active_track = bt
-
-        candidates = [] # Initialize candidates to prevent UnboundLocalError
-
-        if active_track:
-            # We want to show the harmonics for THIS frame, but track stores 'best_candidate' from BEST frame.
-            # We can run detect_harmonics_iterative for this frame's peaks to find the matching candidate.
-            candidates = harmonic_detection.detect_harmonics_iterative(peaks)
-            # Find the one matching track freq
-            match = None
-            for c in candidates:
-                if abs(c['base_freq'] - active_track['freq']) < (active_track['freq'] * config.TOLERANCE):
-                    match = c
-                    break
-
-            if match:
-                hf = [h['freq'] for h in match['harmonics']]
-                hp = [h['power'] for h in match['harmonics']]
-                scatter_harmonics.set_offsets(np.c_[hf, hp])
-
-                # Update Table
-                for r in range(10):
-                    for c in range(4):
-                        the_table[r+1, c].get_text().set_text("-")
-
-                for i, h in enumerate(match['harmonics']):
-                    if i >= 10: break
-                    the_table[i+1, 0].get_text().set_text(f"#{h['harmonic_index']}")
-                    the_table[i+1, 1].get_text().set_text(f"{h['freq']:.1f}")
-                    the_table[i+1, 2].get_text().set_text(f"{h['power']:.1f}")
-                    the_table[i+1, 3].get_text().set_text(f"{h['snr']:.1f}")
-            else:
-                scatter_harmonics.set_offsets(np.empty((0, 2)))
-        else:
-            scatter_harmonics.set_offsets(np.empty((0, 2)))
-            for r in range(10):
-                for c in range(4):
-                    the_table[r+1, c].get_text().set_text("-")
-
-        return line_prob1, line_prob2, line_prob3, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line, the_table
-
-    # Interval: roughly map frame step to real time or faster
-    # frame_step = (N_FFT - Overlap) / fs = 1024 / 44100 ~= 23ms
-    interval_ms = 50 # Slower than real time for visualization
-
-    anim = FuncAnimation(fig, update, frames=range(len(t)),
-                         init_func=init, blit=False, interval=interval_ms)
-    plt.show()
+    plt.tight_layout()
+    plt.savefig(output_image)
+    print(f"Analysis saved to {output_image}")
 
 if __name__ == "__main__":
-    run_analysis()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--file', type=str, help='Path to wav file')
+    parser.add_argument('--output', type=str, default='analysis_result.png', help='Output image path')
+    args = parser.parse_args()
+
+    run_analysis(args.file, args.output)

@@ -23,6 +23,7 @@ MIN_HARMONICS = 2      # Minimum number of harmonics to be considered a valid ev
 HARMONIC_MIN_SNR = 5.0 # SNR threshold specifically for validating harmonic candidates
 HARMONIC_MIN_POWER = -60.0 # Absolute power threshold (dB)
 MISSING_HARMONIC_PENALTY = 0.5 # Penalty multiplier for each missing low-order harmonic
+QUALITY_WEIGHTS = [0.4, 0.4, 0.2] # Default weights for [SNR, Power, Drift]
 
 # Temporal Persistence
 PERSISTENCE_THRESHOLD = 3 # Minimum consecutive frames to consider a harmonic series valid
