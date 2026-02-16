@@ -231,6 +231,8 @@ def run_analysis():
             if bt['start_frame'] <= frame_idx <= bt['last_seen']:
                 active_track = bt
 
+        candidates = [] # Initialize candidates to prevent UnboundLocalError
+
         if active_track:
             # We want to show the harmonics for THIS frame, but track stores 'best_candidate' from BEST frame.
             # We can run detect_harmonics_iterative for this frame's peaks to find the matching candidate.
