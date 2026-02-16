@@ -106,13 +106,22 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
     candidates.sort(key=lambda x: x['score'], reverse=True)
     return candidates[:max_candidates]
 
-def track_harmonics(peaks_per_frame, times):
+def track_harmonics(peaks_per_frame, times, spectral_features_per_frame=None):
+    """
+    Tracks harmonic candidates across frames.
+    Optionally accepts spectral_features_per_frame to store best snapshot context.
+    """
     active_tracks = []
     completed_tracks = []
 
     for frame_idx, peaks in enumerate(peaks_per_frame):
         candidates = detect_harmonics_iterative(peaks, max_candidates=5)
         matched_track_indices = set()
+
+        # Get features for this frame if available
+        current_frame_features = {}
+        if spectral_features_per_frame and frame_idx < len(spectral_features_per_frame):
+            current_frame_features = spectral_features_per_frame[frame_idx]
 
         for cand in candidates:
             best_track_idx = -1
@@ -136,7 +145,8 @@ def track_harmonics(peaks_per_frame, times):
                 if cand['score'] > track['max_score']:
                     track['max_score'] = cand['score']
                     track['best_candidate'] = cand
-                    track['best_frame_idx'] = frame_idx # Store frame index for best snapshot
+                    track['best_frame_idx'] = frame_idx
+                    track['best_frame_features'] = current_frame_features
 
                 matched_track_indices.add(best_track_idx)
             else:
@@ -147,7 +157,8 @@ def track_harmonics(peaks_per_frame, times):
                     'last_seen': frame_idx,
                     'max_score': cand['score'],
                     'best_candidate': cand,
-                    'best_frame_idx': frame_idx
+                    'best_frame_idx': frame_idx,
+                    'best_frame_features': current_frame_features
                 }
                 active_tracks.append(new_track)
 

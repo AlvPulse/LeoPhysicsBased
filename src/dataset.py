@@ -44,12 +44,13 @@ class HarmonicDataset(Dataset):
         if audio is None:
             return self._get_dummy(label)
 
-        # 1. Compute STFT and Peaks
-        # We need the time vector 't' for tracking, so we unpack all 4 returns
-        f, t, Pxx_db, peaks_per_frame = signal_processing.compute_spectrogram_and_peaks(audio, fs)
+        # 1. Compute STFT, Peaks, and Spectral Features
+        # Unpack 5 values now
+        f, t, Pxx_db, peaks_per_frame, spectral_features = signal_processing.compute_spectrogram_and_peaks(audio, fs)
 
         # 2. Track Harmonics
-        tracks = harmonic_detection.track_harmonics(peaks_per_frame, t)
+        # Pass spectral_features to track_harmonics
+        tracks = harmonic_detection.track_harmonics(peaks_per_frame, t, spectral_features)
 
         # 3. Select Best Track
         if not tracks:
@@ -73,10 +74,16 @@ class HarmonicDataset(Dataset):
         linear_vec = feature_extraction.extract_linear_features(best_candidate)
         gnn_data.linear_features = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0)
 
+        # Classifier Features: Comprehensive vector for Gradient Boosting
+        classifier_vec = feature_extraction.extract_classifier_features(best_track)
+        gnn_data.classifier_features = torch.tensor(classifier_vec, dtype=torch.float).unsqueeze(0)
+
         self.cache[idx] = gnn_data
         return gnn_data
 
     def _get_dummy(self, label):
         data = Data(x=torch.zeros((1,3)), edge_index=torch.zeros((2,0)), y=torch.tensor([label], dtype=torch.float))
         data.linear_features = torch.zeros(1, 20)
+        # 31 features: 11 global/spectral + 20 harmonic (10*2)
+        data.classifier_features = torch.zeros(1, 31)
         return data
