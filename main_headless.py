@@ -19,11 +19,11 @@ def process_file(filepath, linear_model, clf, device):
     audio, fs = signal_processing.load_audio(filepath)
     if audio is None: return None
 
-    # 1. Compute STFT and Peaks
-    f, t, Pxx_db, peaks_per_frame = signal_processing.compute_spectrogram_and_peaks(audio, fs)
+    # 1. Compute STFT, Peaks, and Spectral Features
+    f, t, Pxx_db, peaks_per_frame, spectral_features = signal_processing.compute_spectrogram_and_peaks(audio, fs)
 
     # 2. Track Harmonics (Persistence)
-    tracks = harmonic_detection.track_harmonics(peaks_per_frame, t)
+    tracks = harmonic_detection.track_harmonics(peaks_per_frame, t, spectral_features)
 
     # Default values (assume NO event)
     baseline_prob = 0.0
