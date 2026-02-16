@@ -58,9 +58,9 @@ def process_file(filepath, linear_model, gnn_model, device):
                 linear_prob = torch.sigmoid(linear_model(lin_input)).item()
 
             # --- METHOD 3: GNN ---
-            # Build graph from the harmonics of the best candidate
-            # This ensures we feed the GNN the same "clean" structure used in training
-            gnn_data = feature_extraction.build_gnn_data(best_candidate['harmonics'])
+            # Build graph from the peaks of the best frame
+            # Using all peaks (best_peaks) matches the training strategy
+            gnn_data = feature_extraction.build_gnn_data(best_peaks)
 
             with torch.no_grad():
                 # Batch size 1
