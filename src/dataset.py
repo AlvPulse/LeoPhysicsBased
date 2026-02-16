@@ -1,82 +1,110 @@
-import numpy as np
-import torch
-from torch_geometric.data import Data
-from src import config, harmonic_detection, signal_processing, feature_extraction
 import os
+import torch
+import numpy as np
 from torch.utils.data import Dataset
+from torch_geometric.data import Data
+from src import config, signal_processing, harmonic_detection
+
+class HarmonicData(Data):
+    def __inc__(self, key, value, *args, **kwargs):
+        if key == 'linear_x':
+            return 0
+        return super().__inc__(key, value, *args, **kwargs)
+
+    def __cat_dim__(self, key, value, *args, **kwargs):
+        if key == 'linear_x':
+            return 0
+        return super().__cat_dim__(key, value, *args, **kwargs)
 
 class HarmonicDataset(Dataset):
-    def __init__(self, root_dir, transform=None):
-        self.root_dir = root_dir
-        self.files = []
+    def __init__(self, data_dir='data', mode='train', split_ratio=0.8, transform=None):
+        self.data_dir = data_dir
+        self.mode = mode
+        self.transform = transform
+
+        self.file_list = []
         self.labels = []
 
-        # Load YES samples
-        yes_dir = os.path.join(root_dir, 'yes')
-        if os.path.exists(yes_dir):
-            for f in os.listdir(yes_dir):
-                if f.endswith('.wav'):
-                    self.files.append(os.path.join(yes_dir, f))
-                    self.labels.append(1.0)
+        # Load file paths
+        yes_dir = os.path.join(data_dir, 'yes')
+        no_dir = os.path.join(data_dir, 'no')
 
-        # Load NO samples
-        no_dir = os.path.join(root_dir, 'no')
-        if os.path.exists(no_dir):
-            for f in os.listdir(no_dir):
-                if f.endswith('.wav'):
-                    self.files.append(os.path.join(no_dir, f))
-                    self.labels.append(0.0)
+        yes_files = [os.path.join(yes_dir, f) for f in os.listdir(yes_dir) if f.endswith('.wav')]
+        no_files = [os.path.join(no_dir, f) for f in os.listdir(no_dir) if f.endswith('.wav')]
 
-        self.cache = {}
+        all_files = yes_files + no_files
+        all_labels = [1] * len(yes_files) + [0] * len(no_files)
+
+        # Shuffle
+        combined = list(zip(all_files, all_labels))
+        np.random.seed(42) # Reproducibility
+        np.random.shuffle(combined)
+
+        # Split
+        split_idx = int(len(combined) * split_ratio)
+        if mode == 'train':
+            data = combined[:split_idx]
+        else:
+            data = combined[split_idx:]
+
+        self.file_list, self.labels = zip(*data)
 
     def __len__(self):
-        return len(self.files)
+        return len(self.file_list)
 
     def __getitem__(self, idx):
-        if idx in self.cache:
-            return self.cache[idx]
-
-        filepath = self.files[idx]
+        filepath = self.file_list[idx]
         label = self.labels[idx]
 
-        # Load and process
+        # 1. Load Audio
         audio, fs = signal_processing.load_audio(filepath)
         if audio is None:
-            return self._get_dummy(label)
+            return None
 
-        # 1. Compute STFT and Peaks
-        # We need the time vector 't' for tracking, so we unpack all 4 returns
-        f, t, Pxx_db, peaks_per_frame = signal_processing.compute_spectrogram_and_peaks(audio, fs)
+        # 2. Compute Spectrogram & Peaks (Take average or max over time?)
+        # For simple classification, let's take the frame with max energy
+        # Or just compute PSD over the whole file (Welch)
+        f, psd_db = signal_processing.compute_psd(audio, fs)
+        nf = signal_processing.estimate_noise_floor(psd_db)
+        peaks = signal_processing.find_significant_peaks(f, psd_db, nf)
 
-        # 2. Track Harmonics
-        tracks = harmonic_detection.track_harmonics(peaks_per_frame, t)
+        # 3. Harmonic Detection (For Linear Model Features)
+        candidates = harmonic_detection.detect_harmonics_iterative(peaks)
+        linear_features = harmonic_detection.extract_linear_features(candidates)
 
-        # 3. Select Best Track
-        if not tracks:
-            # If no tracks found, return dummy (empty) data
-            return self._get_dummy(label)
+        # 4. Graph Construction (For GNN)
+        # Nodes: [freq_norm, snr_norm, pwr_norm]
+        node_features = []
+        for p in peaks:
+            f_norm = p['freq'] / config.MAX_FREQ
+            snr_norm = min(max(p['snr'], 0), 50) / 50.0
+            pwr_norm = min(max(p['power'] + 100, 0), 100) / 100.0
+            node_features.append([f_norm, snr_norm, pwr_norm])
 
-        # Sort by score descending (already done by track_harmonics but to be safe)
-        tracks.sort(key=lambda x: x['max_score'], reverse=True)
-        best_track = tracks[0]
+        if not node_features:
+            # Handle empty peaks case (silence)
+            # Create a dummy node to avoid GNN crash
+            node_features = [[0.0, 0.0, 0.0]]
+            edge_index = torch.tensor([[0], [0]], dtype=torch.long)
+        else:
+            # Fully connected graph
+            num_nodes = len(node_features)
+            edge_index = []
+            for i in range(num_nodes):
+                for j in range(num_nodes):
+                    if i != j:
+                        edge_index.append([i, j])
 
-        # 4. Extract Features from Best Candidate (Snapshot)
-        # best_track has 'best_candidate', which has 'harmonics'
-        best_candidate = best_track.get('best_candidate')
-        if not best_candidate:
-             return self._get_dummy(label)
+            edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
 
-        # GNN Data: Build graph from the harmonics of the best candidate
-        gnn_data = feature_extraction.build_gnn_data(best_candidate['harmonics'], label=label)
+            if edge_index.numel() == 0: # Single node case resulted in no edges
+                 edge_index = torch.tensor([[0], [0]], dtype=torch.long)
 
-        # Linear Features: Flattened vector from the best candidate
-        linear_vec = feature_extraction.extract_linear_features(best_candidate)
-        gnn_data.linear_features = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0)
+        x = torch.tensor(node_features, dtype=torch.float)
+        y = torch.tensor([label], dtype=torch.float)
 
-        self.cache[idx] = gnn_data
-        return gnn_data
+        # Linear Features as Tensor
+        # Add batch dimension so PyG treats it as a graph-level attribute
+        linear_x = torch.tensor(linear_features, dtype=torch.float).unsqueeze(0)
 
-    def _get_dummy(self, label):
-        data = Data(x=torch.zeros((1,3)), edge_index=torch.zeros((2,0)), y=torch.tensor([label], dtype=torch.float))
-        data.linear_features = torch.zeros(1, 20)
-        return data
+        return HarmonicData(x=x, edge_index=edge_index, y=y, linear_x=linear_x)
