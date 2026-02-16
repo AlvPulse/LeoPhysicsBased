@@ -8,7 +8,7 @@ import os
 # ==========================================
 # ⚙️ CONFIGURATION
 # ==========================================
-FILENAME = 'single_mic3.wav'
+FILENAME = 'data/yes/Autel_Evo_II_20.wav'
 WINDOW_DURATION = 2.0  
 STEP_SIZE = 0.4
 REFRESH_INTERVAL = 100

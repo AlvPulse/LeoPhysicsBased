@@ -48,11 +48,11 @@ def run_analysis():
         linear_model.to(device)
         linear_model.eval()
 
-        gnn_model = GNNEventDetector()
-        gnn_model.load_state_dict(torch.load('models/gnn_model.pth', map_location=device))
-        gnn_model.to(device)
-        gnn_model.eval()
-        print("Models loaded successfully.")
+    #     gnn_model = GNNEventDetector()
+    #     gnn_model.load_state_dict(torch.load('models/gnn_model.pth', map_location=device))
+    #     gnn_model.to(device)
+    #     gnn_model.eval()
+    #     print("Models loaded successfully.")
     except Exception as e:
         print(f"Error loading models: {e}. Ensure you ran train.py.")
         return
@@ -108,10 +108,10 @@ def run_analysis():
                 score2 = torch.sigmoid(linear_model(lin_input)).item()
 
             # GNN Model
-            gnn_data = feature_extraction.build_gnn_data(best_candidate['harmonics'])
-            with torch.no_grad():
-                gnn_batch = Batch.from_data_list([gnn_data]).to(device)
-                score3 = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
+            # gnn_data = feature_extraction.build_gnn_data(best_candidate['harmonics'])
+            # with torch.no_grad():
+            #     gnn_batch = Batch.from_data_list([gnn_data]).to(device)
+            #     score3 = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
 
         # Assign to time series
         # We fill from start to end of the track
@@ -130,7 +130,7 @@ def run_analysis():
     ax_prob = axes[0, 0]
     line_prob1, = ax_prob.plot([], [], color='green', lw=2, label='Baseline (Heuristic)')
     line_prob2, = ax_prob.plot([], [], color='blue', lw=2, label='Linear Model')
-    line_prob3, = ax_prob.plot([], [], color='red', lw=2, label='GNN Model')
+    #line_prob3, = ax_prob.plot([], [], color='red', lw=2, label='GNN Model')
 
     ax_prob.set_title("Event Probability (Persistent Tracks)", fontweight='bold')
     ax_prob.set_ylim(-0.1, 1.1)
@@ -184,13 +184,13 @@ def run_analysis():
     def init():
         line_prob1.set_data([], [])
         line_prob2.set_data([], [])
-        line_prob3.set_data([], [])
+        #line_prob3.set_data([], [])
         line_psd.set_data([], [])
         line_nf.set_data([], [])
         scatter_peaks.set_offsets(np.empty((0, 2)))
         scatter_harmonics.set_offsets(np.empty((0, 2)))
         cursor_line.set_xdata([0])
-        return line_prob1, line_prob2, line_prob3, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line
+        return line_prob1, line_prob2, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line
 
     def update(frame_idx):
         if frame_idx >= len(t): return init()
@@ -202,7 +202,7 @@ def run_analysis():
         valid_indices = t <= current_time
         line_prob1.set_data(t[valid_indices], prob_baseline[valid_indices])
         line_prob2.set_data(t[valid_indices], prob_linear[valid_indices])
-        line_prob3.set_data(t[valid_indices], prob_gnn[valid_indices])
+        #line_prob3.set_data(t[valid_indices], prob_gnn[valid_indices])
 
         # Update Spectrogram Cursor
         cursor_line.set_xdata([current_time])
@@ -323,11 +323,11 @@ def run_analysis():
 
         line_prob1.set_data(history_t, prob1_y)
         line_prob2.set_data(history_t, prob2_y)
-        line_prob3.set_data(history_t, prob3_y)
+        #line_prob3.set_data(history_t, prob3_y)
 
         print(f"Time: {current_time:.1f}s | Scores -> Baseline: {score1:.2f}, Linear: {score2:.2f}, GNN: {score3:.2f}")
 
-        return line_prob1, line_prob2, line_prob3, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line, the_table
+        return line_prob1, line_prob2, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line, the_table
 
     print(f"Starting Analysis on {FILENAME}")
     
@@ -339,7 +339,8 @@ def run_analysis():
     anim = FuncAnimation(fig, update, frames=range(len(t)),
                          init_func=init, blit=False, interval=interval_ms)
     plt.show()
-    return line_prob1, line_prob2, line_prob3, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line, the_table
+    #return line_prob1, line_prob2, line_prob3, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line, the_table
+    return line_prob1, line_prob2,  line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line, the_table
 
 if __name__ == "__main__":
     run_analysis()
