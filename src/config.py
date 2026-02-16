@@ -22,6 +22,11 @@ TOLERANCE = 0.1        # Tolerance for harmonic matching (e.g. 0.1 means +/- 10%
 MIN_HARMONICS = 2      # Minimum number of harmonics to be considered a valid event
 HARMONIC_MIN_SNR = 5.0 # SNR threshold specifically for validating harmonic candidates
 HARMONIC_MIN_POWER = -60.0 # Absolute power threshold (dB)
+MISSING_HARMONIC_PENALTY = 0.5 # Penalty multiplier for each missing low-order harmonic
+
+# Temporal Persistence
+PERSISTENCE_THRESHOLD = 3 # Minimum consecutive frames to consider a harmonic series valid
+PERSISTENCE_BUFFER = 5    # Max frames to look back for matching harmonic series (if intermittent)
 
 # Noise Estimation
 NOISE_FLOOR_WINDOW = 50 # Window size for median filter (in frequency bins)

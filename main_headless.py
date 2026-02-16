@@ -5,92 +5,76 @@ import glob
 from torch_geometric.data import Data, Batch
 
 # Import modules
-from src import config, signal_processing, harmonic_detection, baseline_model
+from src import config, signal_processing, harmonic_detection, baseline_model, feature_extraction
 from src.models import LinearHarmonicModel, GNNEventDetector
 
 def process_file(filepath, linear_model, gnn_model, device):
     """
-    Process a single file and return probabilities.
+    Process a single file and return probabilities using persistence tracking.
     """
     # Load Audio
     audio, fs = signal_processing.load_audio(filepath)
     if audio is None: return None
 
-    # Process Signal (Full duration for this example)
-    f, psd = signal_processing.compute_psd(audio, fs)
-    nf = signal_processing.estimate_noise_floor(psd)
-    peaks = signal_processing.find_significant_peaks(f, psd, nf)
+    # 1. Compute STFT and Peaks
+    f, t, Pxx_db, peaks_per_frame = signal_processing.compute_spectrogram_and_peaks(audio, fs)
 
-    # --- METHOD 1: BASELINE HEURISTIC ---
-    score1, base_freq1 = baseline_model.detect_baseline_heuristic(peaks)
+    # 2. Track Harmonics (Persistence)
+    tracks = harmonic_detection.track_harmonics(peaks_per_frame, t)
 
-    # --- METHOD 2 & 3 PREP: ITERATIVE SEARCH ---
-    candidates = harmonic_detection.detect_harmonics_iterative(peaks)
+    # Default values (assume NO event)
+    baseline_prob = 0.0
+    linear_prob = 0.0
+    gnn_prob = 0.0
+    best_freq = 0.0
 
-    linear_vec = np.zeros(20, dtype=np.float32)
-    best_candidate_freq = 0.0
+    if tracks:
+        # Sort by score descending (already done by track_harmonics but to be safe)
+        tracks.sort(key=lambda x: x['max_score'], reverse=True)
+        best_track = tracks[0]
+        best_freq = best_track['freq']
 
-    if candidates:
-        best_candidate = candidates[0]
-        best_candidate_freq = best_candidate['base_freq']
+        # Get peaks from the best frame of this track for analysis
+        best_frame_idx = best_track.get('best_frame_idx', 0)
 
-        for h in best_candidate['harmonics']:
-            idx = h['harmonic_index']
-            if idx <= 10:
-                vec_idx = (idx - 1) * 2
-                linear_vec[vec_idx] = h['snr'] / 50.0
-                linear_vec[vec_idx+1] = (h['power'] + 100) / 100.0
+        # Safety check for frame index
+        if best_frame_idx >= len(peaks_per_frame):
+            best_frame_idx = 0
 
-    # --- METHOD 2: LINEAR ---
-    with torch.no_grad():
-        lin_input = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0).to(device)
-        score2 = torch.sigmoid(linear_model(lin_input)).item()
+        best_peaks = peaks_per_frame[best_frame_idx]
 
-    # --- METHOD 3: GNN ---
-    if not peaks:
-         x = torch.zeros((1, 3), dtype=torch.float)
-         edge_index = torch.zeros((2, 0), dtype=torch.long)
-    else:
-        freqs = np.array([p['freq'] for p in peaks])
-        powers = np.array([p['power'] for p in peaks])
-        snrs = np.array([p['snr'] for p in peaks])
+        # --- METHOD 1: BASELINE HEURISTIC ---
+        # Run heuristic on the best frame
+        baseline_prob, _ = baseline_model.detect_baseline_heuristic(best_peaks)
 
-        f_norm = freqs / config.MAX_FREQ
-        p_norm = (powers + 100) / 100
-        s_norm = snrs / 50
+        # Retrieve Best Candidate Snapshot
+        best_candidate = best_track.get('best_candidate')
 
-        x = torch.tensor(np.column_stack((f_norm, p_norm, s_norm)), dtype=torch.float)
+        if best_candidate:
+            # --- METHOD 2: LINEAR ---
+            linear_vec = feature_extraction.extract_linear_features(best_candidate)
+            with torch.no_grad():
+                lin_input = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0).to(device)
+                linear_prob = torch.sigmoid(linear_model(lin_input)).item()
 
-        edge_src = []
-        edge_dst = []
-        for i in range(len(peaks)):
-            for j in range(len(peaks)):
-                if i == j: continue
-                fi = peaks[i]['freq']
-                fj = peaks[j]['freq']
-                if fi >= fj: continue
-                ratio = fj / fi
-                harmonic_idx = round(ratio)
-                drift = abs(ratio - harmonic_idx)
-                if harmonic_idx > 1 and drift < config.TOLERANCE:
-                    edge_src.append(i)
-                    edge_dst.append(j)
+            # --- METHOD 3: GNN ---
+            # Build graph from the harmonics of the best candidate
+            # This ensures we feed the GNN the same "clean" structure used in training
+            gnn_data = feature_extraction.build_gnn_data(best_candidate['harmonics'])
 
-        if edge_src:
-            edge_index = torch.tensor([edge_src, edge_dst], dtype=torch.long)
-        else:
-            edge_index = torch.zeros((2, 0), dtype=torch.long)
+            with torch.no_grad():
+                # Batch size 1
+                gnn_batch = Batch.from_data_list([gnn_data]).to(device)
+                gnn_prob = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
 
-    with torch.no_grad():
-        gnn_batch = Batch.from_data_list([Data(x=x, edge_index=edge_index)]).to(device)
-        score3 = torch.sigmoid(gnn_model(gnn_batch.x, gnn_batch.edge_index, gnn_batch.batch)).item()
+    # If no tracks found, probs remain 0.0 (correct for noise files)
 
     return {
         'filename': os.path.basename(filepath),
-        'baseline_prob': score1,
-        'linear_prob': score2,
-        'gnn_prob': score3,
-        'base_freq': best_candidate_freq if best_candidate_freq > 0 else base_freq1
+        'baseline_prob': baseline_prob,
+        'linear_prob': linear_prob,
+        'gnn_prob': gnn_prob,
+        'base_freq': best_freq
     }
 
 def print_confusion_matrix(tp, fp, tn, fn, model_name):
@@ -106,7 +90,7 @@ def print_confusion_matrix(tp, fp, tn, fn, model_name):
     print(f"FN: {fn:<4} | TN: {tn:<4}")
 
 def main():
-    print("Starting Headless Analysis...")
+    print("Starting Headless Analysis (Persistence Enabled)...")
 
     # Load Models
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -122,6 +106,7 @@ def main():
         gnn_model.eval()
     except Exception as e:
         print(f"Error loading models: {e}. Run train.py first.")
+        # Proceeding without models might crash later, but user should have run train.
         return
 
     # Find Files
@@ -133,8 +118,8 @@ def main():
     all_files = yes_files + no_files + debug_files
 
     print(f"Found {len(all_files)} files.")
-    print(f"{'Filename':<20} | {'Base(H)':<10} | {'Linear':<10} | {'GNN':<10} | {'Freq (Hz)':<10} | {'True Label'}")
-    print("-" * 80)
+    print(f"{'Filename':<25} | {'Base(H)':<10} | {'Linear':<10} | {'GNN':<10} | {'Freq (Hz)':<10} | {'True Label'}")
+    print("-" * 90)
 
     # Metrics Accumulators
     metrics = {
@@ -172,12 +157,12 @@ def main():
             elif not is_yes and not p: metrics['GNN']['tn'] += 1
 
             # Print
-            # To avoid spamming, print if incorrect or every 10th
+            # Print if incorrect or every 10th
             is_correct_gnn = (res['gnn_prob'] > 0.5) == is_yes
             if not is_correct_gnn or (metrics['GNN']['tp'] + metrics['GNN']['tn']) % 10 == 0:
-                print(f"{res['filename']:<20} | {res['baseline_prob']:<10.2f} | {res['linear_prob']:<10.2f} | {res['gnn_prob']:<10.2f} | {res['base_freq']:<10.1f} | {label}")
+                print(f"{res['filename']:<25} | {res['baseline_prob']:<10.2f} | {res['linear_prob']:<10.2f} | {res['gnn_prob']:<10.2f} | {res['base_freq']:<10.1f} | {label}")
 
-    print("-" * 80)
+    print("-" * 90)
 
     for m_name, m_vals in metrics.items():
         print_confusion_matrix(m_vals['tp'], m_vals['fp'], m_vals['tn'], m_vals['fn'], m_name)

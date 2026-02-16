@@ -1,0 +1,15 @@
+# Data
+data/
+debug_data/
+models/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Output
+*.log
+headless_output.txt
+train_output.txt
