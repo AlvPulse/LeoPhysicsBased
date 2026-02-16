@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from torch_geometric.data import Data
-from src import config, harmonic_detection, signal_processing
+from src import config, harmonic_detection, signal_processing, feature_extraction
 import os
 from torch.utils.data import Dataset
 
@@ -42,75 +42,41 @@ class HarmonicDataset(Dataset):
         # Load and process
         audio, fs = signal_processing.load_audio(filepath)
         if audio is None:
-            return self._get_dummy()
+            return self._get_dummy(label)
 
-        f, psd = signal_processing.compute_psd(audio, fs)
-        nf = signal_processing.estimate_noise_floor(psd)
-        peaks = signal_processing.find_significant_peaks(f, psd, nf)
+        # 1. Compute STFT and Peaks
+        # We need the time vector 't' for tracking, so we unpack all 4 returns
+        f, t, Pxx_db, peaks_per_frame = signal_processing.compute_spectrogram_and_peaks(audio, fs)
 
-        # --- Prepare GNN Data ---
-        # Nodes: Peaks
-        # Features: [freq_norm, power_norm, snr_norm]
-        # Edges: Harmonic relations
+        # 2. Track Harmonics
+        tracks = harmonic_detection.track_harmonics(peaks_per_frame, t)
 
-        if not peaks:
-             # Handle empty peaks case
-            x = torch.zeros((1, 3), dtype=torch.float)
-            edge_index = torch.zeros((2, 0), dtype=torch.long)
-            linear_features = torch.zeros(20, dtype=torch.float)
-        else:
-            # Normalize features for NN
-            freqs = np.array([p['freq'] for p in peaks])
-            powers = np.array([p['power'] for p in peaks])
-            snrs = np.array([p['snr'] for p in peaks])
+        # 3. Select Best Track
+        if not tracks:
+            # If no tracks found, return dummy (empty) data
+            return self._get_dummy(label)
 
-            # Simple normalization
-            f_norm = freqs / config.MAX_FREQ
-            p_norm = (powers + 100) / 100 # Approx -100 to 0 -> 0 to 1
-            s_norm = snrs / 50 # Approx 0 to 50 -> 0 to 1
+        # Sort by score descending (already done by track_harmonics but to be safe)
+        tracks.sort(key=lambda x: x['max_score'], reverse=True)
+        best_track = tracks[0]
 
-            x = torch.tensor(np.column_stack((f_norm, p_norm, s_norm)), dtype=torch.float)
+        # 4. Extract Features from Best Candidate (Snapshot)
+        # best_track has 'best_candidate', which has 'harmonics'
+        best_candidate = best_track.get('best_candidate')
+        if not best_candidate:
+             return self._get_dummy(label)
 
-            # Build edges
-            edge_src = []
-            edge_dst = []
+        # GNN Data: Build graph from the harmonics of the best candidate
+        gnn_data = feature_extraction.build_gnn_data(best_candidate['harmonics'], label=label)
 
-            for i in range(len(peaks)):
-                for j in range(len(peaks)):
-                    if i == j: continue
-
-                    fi = peaks[i]['freq']
-                    fj = peaks[j]['freq']
-
-                    # Ensure fj > fi (harmonic relationship)
-                    if fi >= fj: continue
-
-                    ratio = fj / fi
-                    harmonic_idx = round(ratio)
-                    drift = abs(ratio - harmonic_idx)
-
-                    # Connect if it looks like a harmonic
-                    if harmonic_idx > 1 and drift < config.TOLERANCE:
-                        edge_src.append(i)
-                        edge_dst.append(j)
-
-            if edge_src:
-                edge_index = torch.tensor([edge_src, edge_dst], dtype=torch.long)
-            else:
-                edge_index = torch.zeros((2, 0), dtype=torch.long)
-
-            # --- Prepare Linear Data ---
-            candidates = harmonic_detection.detect_harmonics_iterative(peaks)
-            linear_vec = harmonic_detection.extract_linear_features(candidates)
-            linear_features = torch.tensor(linear_vec, dtype=torch.float)
-
-        gnn_data = Data(x=x, edge_index=edge_index, y=torch.tensor([label], dtype=torch.float))
-        gnn_data.linear_features = linear_features.unsqueeze(0)
+        # Linear Features: Flattened vector from the best candidate
+        linear_vec = feature_extraction.extract_linear_features(best_candidate)
+        gnn_data.linear_features = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0)
 
         self.cache[idx] = gnn_data
         return gnn_data
 
-    def _get_dummy(self):
-        data = Data(x=torch.zeros((1,3)), edge_index=torch.zeros((2,0)), y=torch.tensor([0.0]))
+    def _get_dummy(self, label):
+        data = Data(x=torch.zeros((1,3)), edge_index=torch.zeros((2,0)), y=torch.tensor([label], dtype=torch.float))
         data.linear_features = torch.zeros(1, 20)
         return data

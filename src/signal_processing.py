@@ -36,6 +36,25 @@ def compute_psd(audio, fs, nperseg=config.N_FFT):
     Pxx_db = 10 * np.log10(Pxx + 1e-10)
     return f, Pxx_db
 
+def compute_spectrogram_and_peaks(audio, fs, nperseg=config.N_FFT, noverlap=None):
+    """Computes spectrogram and finds peaks per time frame."""
+    if noverlap is None:
+        noverlap = nperseg - config.HOP_LENGTH
+
+    f, t, Zxx = signal.stft(audio, fs, nperseg=nperseg, noverlap=noverlap)
+    Pxx = np.abs(Zxx)**2
+    Pxx_db = 10 * np.log10(Pxx + 1e-10)
+
+    peaks_per_frame = []
+
+    for i in range(Pxx_db.shape[1]):
+        psd_frame = Pxx_db[:, i]
+        nf = estimate_noise_floor(psd_frame)
+        peaks = find_significant_peaks(f, psd_frame, nf)
+        peaks_per_frame.append(peaks)
+
+    return f, t, Pxx_db, peaks_per_frame
+
 def estimate_noise_floor(psd_db, window_size=config.NOISE_FLOOR_WINDOW):
     """Estimates the noise floor using a median filter."""
     return ndimage.median_filter(psd_db, size=window_size)
