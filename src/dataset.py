@@ -13,12 +13,14 @@ class HarmonicDataset(Dataset):
 
         # Load YES samples
         yes_dir = os.path.join(root_dir, 'yes')
+        yes_counter=0
         if os.path.exists(yes_dir):
             for f in os.listdir(yes_dir):
-                if f.endswith('.wav'):
+                yes_counter+=1
+                if f.endswith('.wav')|f.endswith('.WAV') :
                     self.files.append(os.path.join(yes_dir, f))
                     self.labels.append(1.0)
-
+        print(yes_counter)
         # Load NO samples
         no_dir = os.path.join(root_dir, 'no')
         if os.path.exists(no_dir):
