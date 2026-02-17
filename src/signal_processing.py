@@ -10,11 +10,11 @@ def apply_bandpass_filter(audio, fs, lowcut=config.MIN_FREQ, highcut=config.MAX_
     nyq = 0.5 * fs
     low = lowcut / nyq
     high = highcut / nyq
-
+    
     # Ensure frequencies are valid
     if low <= 0: low = 0.001
     if high >= 1: high = 0.999
-
+    
     b, a = signal.butter(order, [low, high], btype='band')
     y = signal.lfilter(b, a, audio)
     return y
@@ -55,7 +55,7 @@ def compute_psd(audio, fs, nperseg=config.N_FFT):
         # Pad or repeat
         repeats = int(np.ceil(nperseg / len(audio)))
         audio = np.tile(audio, repeats)[:nperseg]
-
+    
     f, Pxx = signal.welch(audio, fs, nperseg=nperseg)
     Pxx_db = 10 * np.log10(Pxx + 1e-10)
     return f, Pxx_db
@@ -70,15 +70,15 @@ def compute_mfcc_from_spectrum(magnitude_spectrum, fs, n_fft, num_ceps=13):
     num_filters = 26
     low_freq = 0
     high_freq = fs / 2
-
+    
     # Convert to Mel scale
     low_mel = 2595 * np.log10(1 + low_freq / 700)
     high_mel = 2595 * np.log10(1 + high_freq / 700)
     mel_points = np.linspace(low_mel, high_mel, num_filters + 2)
     hz_points = 700 * (10**(mel_points / 2595) - 1)
-
+    
     bin_points = np.floor((n_fft + 1) * hz_points / fs).astype(int)
-
+    
     # Filterbank
     fbank = np.zeros((num_filters, int(n_fft / 2 + 1)))
     for m in range(1, num_filters + 1):
@@ -95,7 +95,7 @@ def compute_mfcc_from_spectrum(magnitude_spectrum, fs, n_fft, num_ceps=13):
     filter_banks = np.dot(fbank, magnitude_spectrum**2) # Power
     filter_banks = np.where(filter_banks == 0, np.finfo(float).eps, filter_banks)  # Numerical Stability
     filter_banks = 10 * np.log10(filter_banks)  # dB
-
+    
     # DCT
     mfcc = dct(filter_banks, type=2, axis=0, norm='ortho')[:num_ceps]
     return mfcc
@@ -139,26 +139,26 @@ def compute_spectral_features(magnitude_spectrum, power_spectrum, freqs):
 
 def compute_spectrogram_and_peaks(audio, fs, nperseg=config.N_FFT, noverlap=None):
     """Computes spectrogram and finds peaks per time frame."""
-
+    
     # Handle short audio by Wrapping (Tiling)
     # This maintains frequency resolution for XGBoost/Spectral features
     if len(audio) < nperseg:
         # print(f"Warning: Audio length {len(audio)} < nperseg {nperseg}. Wrapping signal.")
         repeats = int(np.ceil(nperseg / len(audio))) + 1
         audio = np.tile(audio, repeats)
-        # We don't truncate strictly to nperseg to allow at least one hop if possible,
+        # We don't truncate strictly to nperseg to allow at least one hop if possible, 
         # but let's ensure it's at least nperseg.
         # STFT will handle the rest based on overlap.
 
     if noverlap is None:
         noverlap = nperseg - config.HOP_LENGTH
-
+    
     # Safety check if noverlap >= nperseg (shouldn't happen with fixed nperseg)
     if noverlap >= nperseg:
         noverlap = nperseg - 1
 
     f, t, Zxx = signal.stft(audio, fs, nperseg=nperseg, noverlap=noverlap)
-
+    
     # Zxx is complex: (freqs, times)
     magnitude = np.abs(Zxx)
     Pxx = magnitude**2
@@ -166,7 +166,7 @@ def compute_spectrogram_and_peaks(audio, fs, nperseg=config.N_FFT, noverlap=None
 
     peaks_per_frame = []
     spectral_features = []
-
+    
     prev_magnitude = None
     prev_rms = None
 
@@ -174,9 +174,9 @@ def compute_spectrogram_and_peaks(audio, fs, nperseg=config.N_FFT, noverlap=None
         # Per-frame spectral features
         mag_frame = magnitude[:, i]
         pow_frame = Pxx[:, i]
-
+        
         feats = compute_spectral_features(mag_frame, pow_frame, f)
-
+        
         # MFCCs
         # Note: nperseg here acts as N_FFT
         mfccs = compute_mfcc_from_spectrum(mag_frame, fs, nperseg, num_ceps=13)
@@ -187,16 +187,16 @@ def compute_spectrogram_and_peaks(audio, fs, nperseg=config.N_FFT, noverlap=None
             flux = 0.0
         else:
             flux = np.linalg.norm(mag_frame - prev_magnitude)
-
+        
         feats['flux'] = flux
-
+        
         # Calculate Delta RMS (Energy Velocity)
         curr_rms = feats['rms']
         if prev_rms is None:
             delta_rms = 0.0
         else:
             delta_rms = curr_rms - prev_rms
-
+        
         feats['delta_rms'] = delta_rms
 
         spectral_features.append(feats)
