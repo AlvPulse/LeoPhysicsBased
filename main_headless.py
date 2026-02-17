@@ -9,9 +9,10 @@ from torch_geometric.data import Data, Batch
 # Import modules
 from src import config, signal_processing, harmonic_detection, baseline_model, feature_extraction
 from src.models import LinearHarmonicModel
+from src.ensemble_model import EnsembleHarmonicModel
 # GNNEventDetector removed
 
-def process_file(filepath, linear_model, clf, device):
+def process_file(filepath, ensemble, device):
     """
     Process a single file and return probabilities using persistence tracking.
     """
@@ -29,6 +30,7 @@ def process_file(filepath, linear_model, clf, device):
     baseline_prob = 0.0
     linear_prob = 0.0
     clf_prob = 0.0
+    ensemble_prob = 0.0
     best_freq = 0.0
 
     if tracks:
@@ -54,17 +56,11 @@ def process_file(filepath, linear_model, clf, device):
         best_candidate = best_track.get('best_candidate')
 
         if best_candidate:
-            # --- METHOD 2: LINEAR ---
+            # --- METHOD 2, 3, 4: ENSEMBLE ---
             linear_vec = feature_extraction.extract_linear_features(best_candidate)
-            with torch.no_grad():
-                lin_input = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0).to(device)
-                linear_prob = torch.sigmoid(linear_model(lin_input)).item()
-
-            # --- METHOD 3: CLASSIFIER (XGBoost) ---
             classifier_vec = feature_extraction.extract_classifier_features(best_track)
-            # Sklearn/XGBoost expects (N_samples, N_features)
-            # classifier_vec is 1D, so reshape to (1, -1)
-            clf_prob = clf.predict_proba(classifier_vec.reshape(1, -1))[0][1]
+
+            linear_prob, clf_prob, ensemble_prob = ensemble.predict_proba(linear_vec, classifier_vec)
 
     # If no tracks found, probs remain 0.0 (correct for noise files)
 
@@ -73,6 +69,7 @@ def process_file(filepath, linear_model, clf, device):
         'baseline_prob': baseline_prob,
         'linear_prob': linear_prob,
         'clf_prob': clf_prob,
+        'ensemble_prob': ensemble_prob,
         'base_freq': best_freq
     }
 
@@ -94,13 +91,8 @@ def main():
     # Load Models
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     try:
-        linear_model = LinearHarmonicModel()
-        linear_model.load_state_dict(torch.load('models/linear_model.pth', map_location=device))
-        linear_model.to(device)
-        linear_model.eval()
-
-        # Load Sklearn/XGBoost Model
-        clf = joblib.load('models/classifier_model.pkl')
+        ensemble = EnsembleHarmonicModel(device=device)
+        ensemble.load('models/ensemble')
         
     except Exception as e:
         print(f"Error loading models: {e}. Run train.py first.")
@@ -116,18 +108,19 @@ def main():
     all_files = yes_files + no_files + debug_files
 
     print(f"Found {len(all_files)} files.")
-    print(f"{'Filename':<25} | {'Base(H)':<10} | {'Linear':<10} | {'Classif':<10} | {'Freq (Hz)':<10} | {'True Label'}")
-    print("-" * 90)
+    print(f"{'Filename':<25} | {'Base(H)':<10} | {'Linear':<10} | {'Classif':<10} | {'Ensemble':<10} | {'Freq (Hz)':<10} | {'True Label'}")
+    print("-" * 105)
 
     # Metrics Accumulators
     metrics = {
         'Baseline': {'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0},
         'Linear': {'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0},
         'Classifier': {'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0},
+        'Ensemble': {'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0},
     }
 
     for fpath in all_files:
-        res = process_file(fpath, linear_model, clf, device)
+        res = process_file(fpath, ensemble, device)
         if res:
             is_yes = "yes" in fpath or "Autel" in fpath # Assuming Autel in debug_data/yes is YES
             label = "YES" if is_yes else "NO"
@@ -154,13 +147,20 @@ def main():
             elif not is_yes and p: metrics['Classifier']['fp'] += 1
             elif not is_yes and not p: metrics['Classifier']['tn'] += 1
 
+            # Ensemble
+            p = res['ensemble_prob'] > 0.5
+            if is_yes and p: metrics['Ensemble']['tp'] += 1
+            elif is_yes and not p: metrics['Ensemble']['fn'] += 1
+            elif not is_yes and p: metrics['Ensemble']['fp'] += 1
+            elif not is_yes and not p: metrics['Ensemble']['tn'] += 1
+
             # Print
             # Print if incorrect or every 10th
             is_correct_clf = (res['clf_prob'] > 0.5) == is_yes
             if not is_correct_clf or (metrics['Classifier']['tp'] + metrics['Classifier']['tn']) % 10 == 0:
-                print(f"{res['filename']:<25} | {res['baseline_prob']:<10.2f} | {res['linear_prob']:<10.2f} | {res['clf_prob']:<10.2f} | {res['base_freq']:<10.1f} | {label}")
+                print(f"{res['filename']:<25} | {res['baseline_prob']:<10.2f} | {res['linear_prob']:<10.2f} | {res['clf_prob']:<10.2f} | {res['ensemble_prob']:<10.2f} | {res['base_freq']:<10.1f} | {label}")
 
-    print("-" * 90)
+    print("-" * 105)
 
     for m_name, m_vals in metrics.items():
         print_confusion_matrix(m_vals['tp'], m_vals['fp'], m_vals['tn'], m_vals['fn'], m_name)
