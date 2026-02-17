@@ -11,6 +11,7 @@ from torch_geometric.data import Data, Batch
 # Import modules
 from src import config, signal_processing, harmonic_detection, baseline_model, feature_extraction
 from src.models import LinearHarmonicModel
+from src.ensemble_model import EnsembleHarmonicModel
 # GNNEventDetector removed
 
 # ==========================================
@@ -40,13 +41,8 @@ def run_analysis():
     # Load Models
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     try:
-        linear_model = LinearHarmonicModel()
-        linear_model.load_state_dict(torch.load('models/linear_model.pth', map_location=device))
-        linear_model.to(device)
-        linear_model.eval()
-
-        # Load Sklearn/XGBoost Model
-        clf = joblib.load('models/classifier_model.pkl')
+        ensemble = EnsembleHarmonicModel(device=device)
+        ensemble.load('models/ensemble')
         print("Models loaded successfully.")
     except Exception as e:
         print(f"Error loading models: {e}. Ensure you ran train.py.")
@@ -71,6 +67,7 @@ def run_analysis():
     prob_baseline = np.zeros(num_frames)
     prob_linear = np.zeros(num_frames)
     prob_clf = np.zeros(num_frames)
+    prob_ensemble = np.zeros(num_frames)
 
     # Map tracks to time series
     if tracks:
@@ -92,22 +89,21 @@ def run_analysis():
 
         score2 = 0.0
         score3 = 0.0
+        score4 = 0.0
 
         if best_candidate:
-            # Linear Model
+            # Linear, Classifier, Ensemble
             linear_vec = feature_extraction.extract_linear_features(best_candidate)
-            with torch.no_grad():
-                lin_input = torch.tensor(linear_vec, dtype=torch.float).unsqueeze(0).to(device)
-                score2 = torch.sigmoid(linear_model(lin_input)).item()
-
-            # Classifier Model (XGBoost)
             classifier_vec = feature_extraction.extract_classifier_features(best_track)
-            score3 = clf.predict_proba(classifier_vec.reshape(1, -1))[0][1]
+
+            # Predict
+            score2, score3, score4 = ensemble.predict_proba(linear_vec, classifier_vec)
 
         # Assign to time series (Fill from start to end of the track)
         prob_baseline[start_frame:end_frame+1] = score1
         prob_linear[start_frame:end_frame+1] = score2
         prob_clf[start_frame:end_frame+1] = score3
+        prob_ensemble[start_frame:end_frame+1] = score4
 
         print(f"Best Track Found: {best_track['freq']:.1f}Hz, Frames {start_frame}-{end_frame}, Score: {best_track['max_score']:.2f}")
 
@@ -121,6 +117,7 @@ def run_analysis():
     line_prob1, = ax_prob.plot([], [], color='green', lw=2, label='Baseline')
     line_prob2, = ax_prob.plot([], [], color='blue', lw=2, label='Linear')
     line_prob3, = ax_prob.plot([], [], color='red', lw=2, label='Classifier (XGB)')
+    line_prob4, = ax_prob.plot([], [], color='purple', lw=2, label='Ensemble', linestyle='--')
 
     ax_prob.set_title("Event Probability (Persistent Tracks)", fontweight='bold')
     ax_prob.set_ylim(-0.1, 1.1)
@@ -167,12 +164,13 @@ def run_analysis():
         line_prob1.set_data([], [])
         line_prob2.set_data([], [])
         line_prob3.set_data([], [])
+        line_prob4.set_data([], [])
         line_psd.set_data([], [])
         line_nf.set_data([], [])
         scatter_peaks.set_offsets(np.empty((0, 2)))
         scatter_harmonics.set_offsets(np.empty((0, 2)))
         cursor_line.set_xdata([0])
-        return line_prob1, line_prob2, line_prob3, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line
+        return line_prob1, line_prob2, line_prob3, line_prob4, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line
 
     def update(frame_idx):
         if frame_idx >= len(t): return init()
@@ -184,6 +182,7 @@ def run_analysis():
         line_prob1.set_data(t[valid_indices], prob_baseline[valid_indices])
         line_prob2.set_data(t[valid_indices], prob_linear[valid_indices])
         line_prob3.set_data(t[valid_indices], prob_clf[valid_indices])
+        line_prob4.set_data(t[valid_indices], prob_ensemble[valid_indices])
 
         # Update Spectrogram Cursor
         cursor_line.set_xdata([current_time])
@@ -243,7 +242,7 @@ def run_analysis():
                 for c in range(4):
                     the_table[r+1, c].get_text().set_text("-")
         
-        return line_prob1, line_prob2, line_prob3, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line, the_table
+        return line_prob1, line_prob2, line_prob3, line_prob4, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line, the_table
 
     print(f"Starting Analysis on {FILENAME}")
     interval_ms = 50 
