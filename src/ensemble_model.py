@@ -13,31 +13,42 @@ class EnsembleHarmonicModel:
     Ensemble model combining LinearHarmonicModel (Recall) and XGBoost (Precision)
     via a Meta-Learner (Decision Tree / Logistic Regression).
     """
-    def __init__(self, device='cpu'):
+    def __init__(self, device='cpu', xgb_params=None):
         self.device = device
         
+        # Default XGB Params
+        default_xgb_params = {
+            'n_estimators': 100,
+            'learning_rate': 0.1,
+            'max_depth': 3,
+            'random_state': 42,
+            'eval_metric': 'logloss'
+        }
+
+        if xgb_params:
+            default_xgb_params.update(xgb_params)
+
         # Level 0 Models
         self.linear_model = LinearHarmonicModel().to(self.device)
-        self.xgb_model = xgb.XGBClassifier(
-            n_estimators=100, 
-            learning_rate=0.1, 
-            max_depth=3, 
-            random_state=42,
-            eval_metric='logloss'
-        )
+        self.xgb_model = xgb.XGBClassifier(**default_xgb_params)
         
         # Level 1 Meta-Learner
         # Simple Decision Tree to learn non-linear decision boundary from probs
         # or Logistic Regression for weighted voting.
         self.meta_model = DecisionTreeClassifier(max_depth=3, random_state=42)
         
-    def fit(self, train_loader, val_loader=None, pos_weight=1.0):
+    def fit(self, train_loader, val_loader=None, pos_weight=1.0, lr_linear=None, epochs_linear=None):
         """
         Trains all components of the ensemble.
         """
         # 1. Train Linear Model
         print("Training Linear Model...")
-        self._train_linear_model(train_loader, pos_weight)
+
+        # Use config defaults if not provided
+        lr = lr_linear if lr_linear else config.LEARNING_RATE
+        epochs = epochs_linear if epochs_linear else config.EPOCHS
+
+        self._train_linear_model(train_loader, pos_weight, lr, epochs)
         
         # 2. Train XGBoost
         print("Training XGBoost...")
@@ -89,12 +100,12 @@ class EnsembleHarmonicModel:
         
         return p_lin, p_xgb, p_meta
 
-    def _train_linear_model(self, loader, pos_weight):
-        optimizer = torch.optim.Adam(self.linear_model.parameters(), lr=config.LEARNING_RATE)
+    def _train_linear_model(self, loader, pos_weight, lr, epochs):
+        optimizer = torch.optim.Adam(self.linear_model.parameters(), lr=lr)
         criterion = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).to(self.device))
         
         self.linear_model.train()
-        for epoch in range(config.EPOCHS):
+        for epoch in range(epochs):
             for batch in loader:
                 batch = batch.to(self.device)
                 labels = batch.y.unsqueeze(1)
