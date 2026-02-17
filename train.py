@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch_geometric.loader import DataLoader
 from src.dataset import HarmonicDataset
-from src.models import LinearHarmonicModel, GNNEventDetector
+from src.ensemble_model import EnsembleHarmonicModel
 from src import config
 import os
 import numpy as np
@@ -22,7 +22,7 @@ def train():
     # Weight = Number of Negatives / Number of Positives
     # If n_pos is 0, default to 1
     weight_val = n_neg / n_pos if n_pos > 0 else 1.0
-    pos_weight = torch.tensor([weight_val], dtype=torch.float).to(device)
+    # pos_weight = torch.tensor([weight_val], dtype=torch.float).to(device)
     print(f"Class Distribution: YES={n_pos}, NO={n_neg}, Pos Weight={weight_val:.2f}")
 
     # Validation Split
@@ -30,91 +30,24 @@ def train():
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
+    # Loaders
     train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False)
 
     print(f"Training on {len(train_dataset)} samples, Validating on {len(val_dataset)} samples")
 
-    linear_model = LinearHarmonicModel().to(device)
-    gnn_model = GNNEventDetector().to(device)
+    # Initialize Ensemble
+    ensemble = EnsembleHarmonicModel(device=device)
 
-    opt_linear = optim.Adam(linear_model.parameters(), lr=config.LEARNING_RATE)
-    opt_gnn = optim.Adam(gnn_model.parameters(), lr=config.LEARNING_RATE)
-
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-
-    for epoch in range(config.EPOCHS):
-        linear_model.train()
-        gnn_model.train()
-
-        train_loss_lin = 0
-        train_loss_gnn = 0
-        train_acc_lin = 0
-        train_acc_gnn = 0
-
-        for batch in train_loader:
-            batch = batch.to(device)
-            labels = batch.y.unsqueeze(1)
-
-            # Linear Train
-            lin_feat = batch.linear_features
-            if lin_feat.dim() == 3: lin_feat = lin_feat.squeeze(1)
-
-            opt_linear.zero_grad()
-            out_linear = linear_model(lin_feat)
-            loss_linear = criterion(out_linear, labels)
-            loss_linear.backward()
-            opt_linear.step()
-
-            train_loss_lin += loss_linear.item()
-            train_acc_lin += ((out_linear > 0) == labels).sum().item()
-
-            # GNN Train
-            opt_gnn.zero_grad()
-            out_gnn = gnn_model(batch.x, batch.edge_index, batch.batch)
-            loss_gnn = criterion(out_gnn, labels)
-            loss_gnn.backward()
-            opt_gnn.step()
-
-            train_loss_gnn += loss_gnn.item()
-            train_acc_gnn += ((out_gnn > 0) == labels).sum().item()
-
-        # Validation
-        linear_model.eval()
-        gnn_model.eval()
-
-        val_acc_lin = 0
-        val_acc_gnn = 0
-
-        with torch.no_grad():
-            for batch in val_loader:
-                batch = batch.to(device)
-                labels = batch.y.unsqueeze(1)
-
-                lin_feat = batch.linear_features
-                if lin_feat.dim() == 3: lin_feat = lin_feat.squeeze(1)
-
-                out_linear = linear_model(lin_feat)
-                val_acc_lin += ((out_linear > 0) == labels).sum().item()
-
-                out_gnn = gnn_model(batch.x, batch.edge_index, batch.batch)
-                val_acc_gnn += ((out_gnn > 0) == labels).sum().item()
-
-        # Metrics
-        t_acc_lin = train_acc_lin / len(train_dataset)
-        t_acc_gnn = train_acc_gnn / len(train_dataset)
-        v_acc_lin = val_acc_lin / len(val_dataset)
-        v_acc_gnn = val_acc_gnn / len(val_dataset)
-
-        print(f"Epoch {epoch+1:02d} | "
-              f"Linear (Train/Val Acc): {t_acc_lin:.2f}/{v_acc_lin:.2f} | "
-              f"GNN (Train/Val Acc): {t_acc_gnn:.2f}/{v_acc_gnn:.2f}")
+    # Train
+    # We pass weight_val as the positive weight for both Linear (BCE) and XGBoost (scale_pos_weight)
+    ensemble.fit(train_loader, val_loader, pos_weight=weight_val)
 
     # Save
-    if not os.path.exists('models'): os.makedirs('models')
-    torch.save(linear_model.state_dict(), 'models/linear_model.pth')
-    torch.save(gnn_model.state_dict(), 'models/gnn_model.pth')
-    print("Models saved.")
+    model_dir = 'models/ensemble'
+    if not os.path.exists(model_dir): os.makedirs(model_dir)
+    ensemble.save(model_dir)
+    print(f"Ensemble models saved to {model_dir}")
 
 if __name__ == "__main__":
     train()
