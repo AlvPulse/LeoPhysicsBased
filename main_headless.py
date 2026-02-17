@@ -17,8 +17,6 @@ def process_file(filepath, linear_model, clf, device):
     """
     # Load Audio
     audio, fs = signal_processing.load_audio(filepath)
-    if(len(audio)<config.N_FFT):
-        return None
     if audio is None: return None
 
     # 1. Compute STFT, Peaks, and Spectral Features
@@ -68,7 +66,7 @@ def process_file(filepath, linear_model, clf, device):
             # classifier_vec is 1D, so reshape to (1, -1)
             clf_prob = clf.predict_proba(classifier_vec.reshape(1, -1))[0][1]
 
-    # # If no tracks found, probs remain 0.0 (correct for noise files)
+    # If no tracks found, probs remain 0.0 (correct for noise files)
 
     return {
         'filename': os.path.basename(filepath),
@@ -103,7 +101,7 @@ def main():
 
         # Load Sklearn/XGBoost Model
         clf = joblib.load('models/classifier_model.pkl')
-
+        
     except Exception as e:
         print(f"Error loading models: {e}. Run train.py first.")
         # Proceeding without models might crash later, but user should have run train.

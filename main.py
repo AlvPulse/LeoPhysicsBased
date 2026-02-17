@@ -166,13 +166,13 @@ def run_analysis():
     def init():
         line_prob1.set_data([], [])
         line_prob2.set_data([], [])
-        #line_prob3.set_data([], [])
+        line_prob3.set_data([], [])
         line_psd.set_data([], [])
         line_nf.set_data([], [])
         scatter_peaks.set_offsets(np.empty((0, 2)))
         scatter_harmonics.set_offsets(np.empty((0, 2)))
         cursor_line.set_xdata([0])
-        return line_prob1, line_prob2, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line
+        return line_prob1, line_prob2, line_prob3, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line
 
     def update(frame_idx):
         if frame_idx >= len(t): return init()
@@ -209,8 +209,7 @@ def run_analysis():
             bt = tracks[0]
             if bt['start_frame'] <= frame_idx <= bt['last_seen']:
                 active_track = bt
-        
-        candidates = [] # Initialize candidates to prevent UnboundLocalError
+
         if active_track:
             # Find candidate in current frame that matches active track
             candidates = harmonic_detection.detect_harmonics_iterative(peaks)
@@ -243,11 +242,11 @@ def run_analysis():
             for r in range(10):
                 for c in range(4):
                     the_table[r+1, c].get_text().set_text("-")
-
+        
         return line_prob1, line_prob2, line_prob3, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line, the_table
 
     print(f"Starting Analysis on {FILENAME}")
-    interval_ms = 50
+    interval_ms = 50 
 
     anim = FuncAnimation(fig, update, frames=range(len(t)),
                          init_func=init, blit=False, interval=interval_ms)
