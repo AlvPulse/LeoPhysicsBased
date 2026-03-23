@@ -36,3 +36,23 @@ NOISE_FLOOR_WINDOW = 50 # Window size for median filter (in frequency bins)
 BATCH_SIZE = 8
 LEARNING_RATE = 0.001
 EPOCHS = 20
+
+# False Alarm Rejector Rules (Expert System Thresholds)
+# -----------------------------------------------------
+# Operator can tune these to adjust the 80% rule-based rejection logic.
+REJECTOR_RULES = {
+    "BAND_LOW": [0, 300],          # Frequency band (Hz) considered "Low" (e.g., Wind)
+    "BAND_MID": [300, 2000],       # Frequency band (Hz) considered "Mid"
+    "BAND_HIGH": [2000, 4000],     # Frequency band (Hz) considered "High" (e.g., Airplanes)
+
+    # Ratios representing the proportion of total spectral energy in a specific band
+    "WIND_LOW_BAND_RATIO_MIN": 0.70,     # If >70% of energy is in the LOW band, flag as Wind
+    "AIRPLANE_HIGH_BAND_RATIO_MIN": 0.40,# If >40% of energy is in the HIGH band, flag as Airplane
+
+    # Spectral Flatness measures how noise-like a signal is (0 = pure tone, 1 = white noise)
+    "FLATNESS_MAX_TONAL": 0.2,     # Below 0.2 is considered highly tonal (e.g., harmonic, siren)
+    "FLATNESS_MIN_NOISE": 0.6,     # Above 0.6 is considered broadband noise
+
+    # Temporal Features
+    "ZCR_MIN_NOISE": 0.1,          # High zero-crossing rate implies unvoiced/noisy signals
+}
