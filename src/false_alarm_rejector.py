@@ -124,20 +124,23 @@ class FalseAlarmRejector:
         # 3. Harmonic Features
         # Extract harmonic information using existing project logic
         f_stft, t_stft, Pxx_db, peaks_per_frame = compute_spectrogram_and_peaks(audio, fs)
-        all_harmonics_per_frame = []
-        for peaks in peaks_per_frame:
-            harmonics = detect_harmonics_iterative(peaks)
-            all_harmonics_per_frame.append(harmonics)
 
-        active_series = track_harmonics(all_harmonics_per_frame)
+        # track_harmonics handles the iterative detection and tracking internally
+        # based on peaks_per_frame
+        try:
+            # Depending on the local codebase version, track_harmonics might take 1 or 2 arguments.
+            # The traceback indicates it takes 1 argument locally.
+            active_series = track_harmonics(peaks_per_frame)
+        except TypeError:
+            # Fallback if the environment has a version requiring both arguments
+            active_series = track_harmonics(peaks_per_frame, t_stft)
 
         # Feature: Harmonic Score
-        # We define harmonic score as the maximum confidence of any tracked series,
-        # or the number of tracked series, etc. Here we'll use the ratio of frames
-        # that contain at least one active harmonic series over total frames.
+        # We define harmonic score as the ratio of frames that contain
+        # at least one active harmonic series over total frames.
         if len(t_stft) > 0 and len(active_series) > 0:
-            # Calculate sum of durations of all tracked series relative to total frames
-            total_harmonic_frames = sum(series['duration'] for series in active_series)
+            # Calculate sum of persistences (durations) of all tracked series relative to total frames
+            total_harmonic_frames = sum(series['persistence'] for series in active_series)
             # Normalize by total frames (could exceed 1 if overlapping series, so we clip)
             features['harmonic_score'] = min(1.0, total_harmonic_frames / len(t_stft))
         else:
