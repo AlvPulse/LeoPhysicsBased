@@ -38,8 +38,21 @@ def compute_psd(audio, fs, nperseg=config.N_FFT):
 
 def compute_spectrogram_and_peaks(audio, fs, nperseg=config.N_FFT, noverlap=None):
     """Computes spectrogram and finds peaks per time frame."""
+    # Ensure nperseg is not larger than the audio signal length to avoid scipy stft issues
+    if len(audio) < nperseg:
+        nperseg = len(audio)
+
     if noverlap is None:
-        noverlap = nperseg - config.HOP_LENGTH
+        # Default overlap is configured based on config.N_FFT, so we scale it
+        # proportionally if nperseg had to be reduced for a short signal.
+        if nperseg < config.N_FFT:
+            noverlap = nperseg // 2
+        else:
+            noverlap = nperseg - config.HOP_LENGTH
+
+    # Extra safety check: scipy requires noverlap to be strictly less than nperseg
+    if noverlap >= nperseg:
+        noverlap = nperseg - 1
 
     f, t, Zxx = signal.stft(audio, fs, nperseg=nperseg, noverlap=noverlap)
     Pxx = np.abs(Zxx)**2

@@ -56,6 +56,12 @@ class FalseAlarmRejector:
         """
         Extracts physics-based and statistical features from the audio signal.
         """
+        # If signal is extremely short (e.g., < N_FFT), zero-pad it to
+        # avoid degenerate errors in Welch PSD or other spectral functions
+        if len(audio) < config.N_FFT:
+            pad_width = config.N_FFT - len(audio)
+            audio = np.pad(audio, (0, pad_width), mode='constant')
+
         features = {}
 
         # 1. Temporal Features
