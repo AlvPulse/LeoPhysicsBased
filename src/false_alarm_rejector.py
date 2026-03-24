@@ -261,15 +261,11 @@ class FalseAlarmRejector:
         print("Training Rejector ML Stage...")
         for i, (audio, fs, label) in enumerate(zip(X_train_audio, fs_list, y_train)):
             feats = self.extract_features(audio, fs)
-
-            # Only train on data that the Expert System DOES NOT confidently classify
-            # This makes the ML model focus on the hard cases (the 20%)
-            if self.evaluate_expert_rules(feats) is None:
-                X_features.append(self._features_to_array(feats))
-                y_filtered.append(label)
+            X_features.append(self._features_to_array(feats))
+            y_filtered.append(label)
 
         if len(X_features) == 0:
-            print("Warning: Expert rules classified all training data. ML model not trained.")
+            print("Warning: No data provided to train ML model.")
             return
 
         X = np.array(X_features)
