@@ -4,6 +4,10 @@ data/
 *.pyc
 *.cpython
 models/
+myenv/
+legacy/
+*.identifier
+gemeni.md
 =======
 # Data
 data/

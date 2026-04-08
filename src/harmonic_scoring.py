@@ -132,7 +132,7 @@ def harmonic_lattice_voting(peak_freqs,
 
             ratio = fj / fi
 
-            for m in range(1, num_harmonics + 1):
+            for m in range(0, num_harmonics + 1):
                 for k in range(1, num_harmonics + 1):
                     expected = k / m
 
@@ -143,6 +143,45 @@ def harmonic_lattice_voting(peak_freqs,
                             scores[idx] += (mi + mj) * 0.5
 
     return f0_axis, scores
+
+
+# ============================================================
+# 5.5️⃣ FAMOUS METHODS: HPS & Cepstrum (Operating on PSD)
+# ============================================================
+
+def harmonic_product_spectrum(psd, freqs, num_harmonics=5):
+    """
+    Harmonic Product Spectrum (HPS) evaluated by multiplying decimated versions of the spectrum.
+    """
+    hps = np.copy(psd)
+    for h in range(2, num_harmonics + 1):
+        decimated = psd[::h]
+        # Multiply into the HPS array
+        hps[:len(decimated)] *= decimated
+    return freqs, hps
+
+
+def cepstrum_scoring(psd, freqs):
+    """
+    Cepstrum-based F0 scoring. Highlights periodicity in the spectrum.
+    """
+    log_spec = np.log(np.maximum(psd, 1e-12))
+    # Compute real cepstrum
+    ceps = np.abs(np.fft.ifft(log_spec))[:len(log_spec)//2]
+    
+    df = freqs[1] - freqs[0] if len(freqs) > 1 else 1.0
+    if df == 0: df = 1.0
+    
+    N = len(log_spec)
+    quefrency = np.arange(len(ceps)) / (N * df)
+    
+    valid = quefrency > 0
+    quefrency = quefrency[valid]
+    ceps = ceps[valid]
+    
+    f0_implied = 1.0 / quefrency
+    # Reverse to have ascending f0
+    return f0_implied[::-1], ceps[::-1]
 
 
 # ============================================================
@@ -199,6 +238,54 @@ def compute_f0_scores_all(
         raise ValueError("Unknown method.")
 
     return f0_candidates, scores
+
+
+def compute_fixed_grid_scores(peak_freqs, peak_mags, fmin=80, fmax=2000, resolution=5.0, method="weighted", num_harmonics=6, tol=10):
+    """
+    Evaluates peak scores uniformly over a fixed F0 grid. 
+    Necessary for tracking matrices across chunks.
+    """
+    f0_axis = np.arange(fmin, fmax, resolution)
+    if len(peak_freqs) == 0:
+        return f0_axis, np.zeros_like(f0_axis)
+    
+    if method == "sum":
+        scores = harmonic_sum_peaks(peak_freqs, peak_mags, f0_axis, num_harmonics, tol)
+    elif method == "weighted":
+        scores = weighted_harmonic_sum_peaks(peak_freqs, peak_mags, f0_axis, num_harmonics, tol)
+    elif method == "log":
+        scores = log_harmonic_sum_peaks(peak_freqs, peak_mags, f0_axis, num_harmonics, tol)
+    elif method == "lattice":
+        _, scores = harmonic_lattice_voting(peak_freqs, peak_mags, fmin, fmax, num_harmonics, resolution, ratio_tol=0.015)
+    else:
+        scores = np.zeros_like(f0_axis)
+        
+    return f0_axis, scores
+
+
+# ============================================================
+# 6.5️⃣ DYNAMIC PROGRAMMING TRACKER
+# ============================================================
+
+def dp_harmonic_tracking(chunk_scores_matrix, decay=0.8, transition_width=2):
+    """
+    Applies Dynamic Programming across time (adds up previous chunks to the current).
+    chunk_scores_matrix: (T, F) array of F0 scores.
+    decay: multiplier for previous chunk's max score (must be < 1.0)
+    transition_width: allowable index drift between chunks.
+    """
+    dp_scores = np.zeros_like(chunk_scores_matrix)
+    if len(chunk_scores_matrix) == 0:
+        return dp_scores
+
+    dp_scores[0] = chunk_scores_matrix[0]
+    for t in range(1, len(chunk_scores_matrix)):
+        for f in range(chunk_scores_matrix.shape[1]):
+            start_idx = max(0, f - transition_width)
+            end_idx = min(chunk_scores_matrix.shape[1], f + transition_width + 1)
+            dp_scores[t, f] = chunk_scores_matrix[t, f] + decay * np.max(dp_scores[t-1, start_idx:end_idx])
+
+    return dp_scores
 
 
 # ============================================================
