@@ -2,7 +2,7 @@ import bisect
 import numpy as np
 from src import config
 
-def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, power_threshold=None, tolerance=None):
+def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, power_threshold=None, tolerance=None, max_freq_limit=None, min_harmonics=None, missing_penalty=None):
     if not peaks:
         return []
 
@@ -10,9 +10,9 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
     power_threshold = power_threshold if power_threshold is not None else config.HARMONIC_MIN_POWER
     tolerance = tolerance if tolerance is not None else config.TOLERANCE
 
-    max_freq_limit = config.MAX_FREQ * 1.1
-    min_harmonics = config.MIN_HARMONICS
-    missing_penalty = config.MISSING_HARMONIC_PENALTY
+    max_freq_limit = max_freq_limit if max_freq_limit is not None else config.MAX_FREQ * 1.1
+    min_harmonics = min_harmonics if min_harmonics is not None else config.MIN_HARMONICS
+    missing_penalty = missing_penalty if missing_penalty is not None else config.MISSING_HARMONIC_PENALTY
 
     peaks_sorted_freq = sorted(peaks, key=lambda x: x['freq'])
     num_peaks = len(peaks_sorted_freq)
@@ -106,16 +106,16 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
     return candidates[:max_candidates]
 
 
-def track_harmonics(peaks_per_frame, times=None):
+def track_harmonics(peaks_per_frame, times=None, snr_threshold=None, power_threshold=None, tolerance=None, max_freq_limit=None, min_harmonics=None, missing_penalty=None):
     active_tracks = []
     completed_tracks = []
 
-    tol = config.TOLERANCE
+    tol = tolerance if tolerance is not None else config.TOLERANCE
     p_buf = config.PERSISTENCE_BUFFER
     p_thresh = config.PERSISTENCE_THRESHOLD
 
     for frame_idx, peaks in enumerate(peaks_per_frame):
-        candidates = detect_harmonics_iterative(peaks, max_candidates=5)
+        candidates = detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=snr_threshold, power_threshold=power_threshold, tolerance=tolerance, max_freq_limit=max_freq_limit, min_harmonics=min_harmonics, missing_penalty=missing_penalty)
 
         if not candidates:
             active_tracks_next = []

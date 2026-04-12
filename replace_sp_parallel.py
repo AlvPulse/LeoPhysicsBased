@@ -1,4 +1,7 @@
-import numpy as np
+with open('src/signal_processing.py', 'r') as f:
+    content = f.read()
+
+new_content = """import numpy as np
 import scipy.signal as signal
 import scipy.io.wavfile as wavfile
 from multiprocessing import Pool
@@ -102,3 +105,7 @@ def compute_spectrogram_and_peaks(audio, fs, nperseg=config.N_FFT, noverlap=None
             )
 
     return f, t, Pxx_db, peaks_per_frame
+"""
+
+with open('src/signal_processing.py', 'w') as f:
+    f.write(new_content)
