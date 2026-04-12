@@ -146,10 +146,8 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
                 total_quality += h['quality']
                 total_drift += h['drift']
 
-                # Signal power weight based on drift
-                w = 1.0 - h['drift']
-                if w < 0: w = 0
-                total_power += h['power'] * w
+                # Harmonic summation: sum of harmonic powers
+                total_power += h['power']
 
                 found_indices.add(h['harmonic_index'])
 
