@@ -1,72 +1,39 @@
+import time
+import random
+import sys
 import bisect
-import numpy as np
-from src import config
+from unittest.mock import MagicMock
 
-def calculate_quality(harmonic, weights=None):
-    """
-    Calculates the quality factor for a single harmonic.
-    Q = w1*SNR + w2*Power + w3*(1-Drift)
-    """
-    w_snr = 0.5
-    w_pwr = 0.3
-    w_drift = 0.2
+class Config:
+    HARMONIC_MIN_SNR = 5
+    HARMONIC_MIN_POWER = 10
+    TOLERANCE = 0.05
+    MAX_FREQ = 2000
+    MIN_HARMONICS = 3
+    MISSING_HARMONIC_PENALTY = 0.8
+    PERSISTENCE_BUFFER = 5
+    PERSISTENCE_THRESHOLD = 3
 
-    snr_norm = harmonic['snr']
-    if snr_norm < 0: snr_norm = 0
-    elif snr_norm > 50: snr_norm = 50
-    snr_norm *= 0.02
+sys.modules['src.config'] = Config
+sys.modules['numpy'] = MagicMock()
 
-    pwr_norm = harmonic['power'] + 100
-    if pwr_norm < 0: pwr_norm = 0
-    elif pwr_norm > 100: pwr_norm = 100
-    pwr_norm *= 0.01
+def calculate_quality(harmonic):
+    snr_norm = min(max(harmonic['snr'], 0), 50) * 0.01
+    pwr_norm = min(max(harmonic['power'] + 100, 0), 100) * 0.003
+    drift_score = max(0, 1.0 - harmonic['drift'])
+    return snr_norm + pwr_norm + (0.2 * drift_score)
 
-    drift = harmonic['drift']
-    drift_score = 1.0 - drift
-    if drift_score < 0: drift_score = 0
-
-    q = (w_snr * snr_norm) + (w_pwr * pwr_norm) + (w_drift * drift_score)
-    return q
-
-
-def calculate_quality(harmonic, weights=None):
-    """
-    Calculates the quality factor for a single harmonic.
-    Q = w1*SNR + w2*Power + w3*(1-Drift)
-    """
-    w_snr = 0.5
-    w_pwr = 0.3
-    w_drift = 0.2
-
-    snr_norm = harmonic['snr']
-    if snr_norm < 0: snr_norm = 0
-    elif snr_norm > 50: snr_norm = 50
-    snr_norm *= 0.02
-
-    pwr_norm = harmonic['power'] + 100
-    if pwr_norm < 0: pwr_norm = 0
-    elif pwr_norm > 100: pwr_norm = 100
-    pwr_norm *= 0.01
-
-    drift = harmonic['drift']
-    drift_score = 1.0 - drift
-    if drift_score < 0: drift_score = 0
-
-    q = (w_snr * snr_norm) + (w_pwr * pwr_norm) + (w_drift * drift_score)
-    return q
-
-
-def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, power_threshold=None, tolerance=None, max_freq_limit=None, min_harmonics=None, missing_penalty=None):
+def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, power_threshold=None, tolerance=None):
     if not peaks:
         return []
 
-    snr_threshold = snr_threshold if snr_threshold is not None else config.HARMONIC_MIN_SNR
-    power_threshold = power_threshold if power_threshold is not None else config.HARMONIC_MIN_POWER
-    tolerance = tolerance if tolerance is not None else config.TOLERANCE
+    snr_threshold = snr_threshold if snr_threshold is not None else Config.HARMONIC_MIN_SNR
+    power_threshold = power_threshold if power_threshold is not None else Config.HARMONIC_MIN_POWER
+    tolerance = tolerance if tolerance is not None else Config.TOLERANCE
 
-    max_freq_limit = max_freq_limit if max_freq_limit is not None else config.MAX_FREQ * 1.1
-    min_harmonics = min_harmonics if min_harmonics is not None else config.MIN_HARMONICS
-    missing_penalty = missing_penalty if missing_penalty is not None else config.MISSING_HARMONIC_PENALTY
+    max_freq_limit = Config.MAX_FREQ * 1.1
+    min_harmonics = Config.MIN_HARMONICS
+    missing_penalty = Config.MISSING_HARMONIC_PENALTY
 
     peaks_sorted_freq = sorted(peaks, key=lambda x: x['freq'])
     num_peaks = len(peaks_sorted_freq)
@@ -80,9 +47,21 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
 
         harmonics = []
 
-        # Add the fundamental
         base_harmonic = base_peak.copy()
         base_harmonic['harmonic_index'] = 1
+        base_harmonic['drift'] = 0.0
+
+        snr_norm = base_harmonic['snr']
+        if snr_norm < 0: snr_norm = 0
+        elif snr_norm > 50: snr_norm = 50
+        snr_norm *= 0.01
+
+        pwr_norm = base_harmonic['power'] + 100
+        if pwr_norm < 0: pwr_norm = 0
+        elif pwr_norm > 100: pwr_norm = 100
+        pwr_norm *= 0.003
+
+        base_harmonic['quality'] = snr_norm + pwr_norm + 0.2
 
         harmonics.append(base_harmonic)
 
@@ -96,11 +75,6 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
 
             best_match = None
             min_dist = float('inf')
-
-            # Search for a peak near target_freq
-            # Optimization: could use binary search, but linear scan is fine for small N
-            lower_bound = target_freq * (1 - tolerance)
-            upper_bound = target_freq * (1 + tolerance)
 
             target_tol = target_freq * tolerance
 
@@ -132,6 +106,24 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
                 if not is_dup:
                     h_info = best_match.copy()
                     h_info['harmonic_index'] = current_harmonic_idx
+                    h_drift = min_dist / target_freq
+                    h_info['drift'] = h_drift
+
+                    snr_norm = h_info['snr']
+                    if snr_norm < 0: snr_norm = 0
+                    elif snr_norm > 50: snr_norm = 50
+                    snr_norm *= 0.01
+
+                    pwr_norm = h_info['power'] + 100
+                    if pwr_norm < 0: pwr_norm = 0
+                    elif pwr_norm > 100: pwr_norm = 100
+                    pwr_norm *= 0.003
+
+                    drift_score = 1.0 - h_drift
+                    if drift_score < 0: drift_score = 0
+
+                    h_info['quality'] = snr_norm + pwr_norm + (0.2 * drift_score)
+
                     harmonics.append(h_info)
                 consecutive_misses = 0
             else:
@@ -140,16 +132,22 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
             current_harmonic_idx += 1
 
         if len(harmonics) >= min_harmonics:
+            total_quality = 0.0
+            total_drift = 0.0
             total_power = 0.0
             found_indices = set()
             for h in harmonics:
-                total_power += h['power']
+                total_quality += h['quality']
+                total_drift += h['drift']
+                # Weighted power sum for observability
+                # Wait, what weights? Let's just sum power * quality for now, or maybe just simple power
+                # "considering summation of its weighted harmonics" - we can use quality as the weight
+                total_power += h['power'] * h['quality']
                 found_indices.add(h['harmonic_index'])
 
-            score = total_power
+            avg_drift = total_drift / len(harmonics)
+            score = total_quality * (1.0 - avg_drift)
 
-            # Penalty for missing lower-order harmonics
-            # (e.g. found 3rd and 4th but missed 2nd)
             max_found_idx = harmonics[-1]['harmonic_index']
             check_upper = max_found_idx if max_found_idx < 6 else 6
             if check_upper > 2:
@@ -161,24 +159,23 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
                 'base_freq': f0,
                 'harmonics': harmonics,
                 'score': score,
-                'signal_power': total_power
+                'signal_power': total_power # added for observability
             })
 
-    # Return top candidates
     candidates.sort(key=lambda x: x['score'], reverse=True)
     return candidates[:max_candidates]
 
 
-def track_harmonics(peaks_per_frame, times=None, snr_threshold=None, power_threshold=None, tolerance=None, max_freq_limit=None, min_harmonics=None, missing_penalty=None):
+def track_harmonics(peaks_per_frame, times):
     active_tracks = []
     completed_tracks = []
 
-    tol = tolerance if tolerance is not None else config.TOLERANCE
-    p_buf = config.PERSISTENCE_BUFFER
-    p_thresh = config.PERSISTENCE_THRESHOLD
+    tol = Config.TOLERANCE
+    p_buf = Config.PERSISTENCE_BUFFER
+    p_thresh = Config.PERSISTENCE_THRESHOLD
 
     for frame_idx, peaks in enumerate(peaks_per_frame):
-        candidates = detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=snr_threshold, power_threshold=power_threshold, tolerance=tolerance, max_freq_limit=max_freq_limit, min_harmonics=min_harmonics, missing_penalty=missing_penalty)
+        candidates = detect_harmonics_iterative(peaks, max_candidates=5)
 
         if not candidates:
             active_tracks_next = []
@@ -198,7 +195,6 @@ def track_harmonics(peaks_per_frame, times=None, snr_threshold=None, power_thres
             best_dist = float('inf')
             cand_freq = cand['base_freq']
 
-            # Try to match candidate to an active track
             for t_idx, track in enumerate(active_tracks):
                 if t_idx in matched_track_indices: continue
 
@@ -209,7 +205,6 @@ def track_harmonics(peaks_per_frame, times=None, snr_threshold=None, power_thres
                     best_track_idx = t_idx
 
             if best_track_idx != -1:
-                # Update existing track
                 track = active_tracks[best_track_idx]
                 track['persistence'] += 1
                 track['last_seen'] = frame_idx
@@ -220,6 +215,7 @@ def track_harmonics(peaks_per_frame, times=None, snr_threshold=None, power_thres
                     track['max_score'] = cand_score
                     track['best_candidate'] = cand
                     track['best_frame_idx'] = frame_idx
+                    # observability properties
                     track['base_freq'] = cand['base_freq']
                     track['signal_power'] = cand['signal_power']
 
@@ -233,11 +229,11 @@ def track_harmonics(peaks_per_frame, times=None, snr_threshold=None, power_thres
                     'max_score': cand['score'],
                     'best_candidate': cand,
                     'best_frame_idx': frame_idx,
+                    # observability properties
                     'base_freq': cand['base_freq'],
                     'signal_power': cand['signal_power']
                 })
 
-        # Maintenance: Remove old tracks, move completed ones
         active_tracks_next = []
         for t in active_tracks:
             if frame_idx - t['last_seen'] > p_buf:
@@ -247,7 +243,6 @@ def track_harmonics(peaks_per_frame, times=None, snr_threshold=None, power_thres
                 active_tracks_next.append(t)
         active_tracks = active_tracks_next
 
-    # Flush remaining active tracks
     for t in active_tracks:
         if t['persistence'] >= p_thresh:
             completed_tracks.append(t)
@@ -255,36 +250,22 @@ def track_harmonics(peaks_per_frame, times=None, snr_threshold=None, power_thres
     completed_tracks.sort(key=lambda x: x['max_score'], reverse=True)
     return completed_tracks
 
-def extract_linear_features(candidates, num_harmonics=10):
-    """
-    Extracts a fixed-size feature vector for the Linear Model.
-    Input: Candidate object (or list of candidates)
-    Output: np.array of shape (num_harmonics * 2,) -> [SNR1, Pwr1, SNR2, Pwr2...]
-    """
-    vec = np.zeros(num_harmonics * 2, dtype=np.float32)
+def run_pipeline():
+    peaks_per_frame = []
+    # Less peaks per frame might be more realistic? Let's use 100 peaks per frame to match previous test
+    for f in range(100):
+        peaks = []
+        for i in range(100):
+            peaks.append({'freq': random.uniform(50, 2500), 'snr': random.uniform(0, 20), 'power': random.uniform(0, 50), 'drift': random.uniform(0, 0.1)})
+        peaks.sort(key=lambda x: x['freq'])
+        peaks_per_frame.append(peaks)
 
-    best = None
-    if isinstance(candidates, list):
-        if len(candidates) > 0:
-            if 'best_candidate' in candidates[0]:
-                 # It's a track object
-                best = candidates[0]['best_candidate']
-            else:
-                 # It's a raw candidate
-                best = candidates[0]
-    elif isinstance(candidates, dict):
-         best = candidates
+    start = time.perf_counter()
+    active_series = track_harmonics(peaks_per_frame, None)
+    end = time.perf_counter()
 
-    if best is None:
-        return vec
+    return end - start
 
-    for h in best['harmonics']:
-        idx = h['harmonic_index']
-        if idx <= num_harmonics:
-            vec_idx = (idx - 1) * 2
-
-            # Normalize for NN stability
-            vec[vec_idx] = min(max(h['snr'], 0), 50) / 50.0
-            vec[vec_idx+1] = min(max(h['power'] + 100, 0), 100) / 100.0
-
-    return vec
+random.seed(42)
+t = run_pipeline()
+print(f"Time per frame (separate detect_harmonics_iterative) V9: {(t*1000)/100:.4f} ms")

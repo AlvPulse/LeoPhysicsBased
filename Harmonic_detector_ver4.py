@@ -8,7 +8,7 @@ import os
 # ==========================================
 # ⚙️ CONFIGURATION
 # ==========================================
-FILENAME = 'single_mic3.wav'
+FILENAME = 'data/yes/DJI_Mavic_Air2_63.wav'
 WINDOW_DURATION = 2.0  
 STEP_SIZE = 0.4
 REFRESH_INTERVAL = 100

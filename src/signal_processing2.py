@@ -59,12 +59,7 @@ def _process_frame(args):
 
 def compute_spectrogram_and_peaks(audio, fs, nperseg=config.N_FFT, noverlap=None, parallel=False):
     if noverlap is None:
-        # Default overlap is configured based on config.N_FFT, so we scale it
-        # proportionally if nperseg had to be reduced for a short signal.
-        if nperseg < config.N_FFT:
-            noverlap = nperseg // 2
-        else:
-            noverlap = nperseg - config.HOP_LENGTH
+        noverlap = nperseg - config.HOP_LENGTH
 
     f, t, Zxx = signal.stft(audio, fs, nperseg=nperseg, noverlap=noverlap)
     Pxx = np.abs(Zxx)**2
