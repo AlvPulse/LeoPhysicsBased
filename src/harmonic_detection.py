@@ -2,33 +2,6 @@ import bisect
 import numpy as np
 from src import config
 
-def calculate_quality(harmonic):
-    """
-    Calculates the quality factor for a single harmonic.
-    Q = w1*SNR + w2*Power + w3*(1-Drift)
-    """
-    w_snr = 0.5
-    w_pwr = 0.3
-    w_drift = 0.2
-
-    snr_norm = harmonic['snr']
-    if snr_norm < 0: snr_norm = 0
-    elif snr_norm > 50: snr_norm = 50
-    snr_norm *= 0.02
-
-    pwr_norm = harmonic['power'] + 100
-    if pwr_norm < 0: pwr_norm = 0
-    elif pwr_norm > 100: pwr_norm = 100
-    pwr_norm *= 0.01
-
-    drift = harmonic['drift']
-    drift_score = 1.0 - drift
-    if drift_score < 0: drift_score = 0
-
-    q = (w_snr * snr_norm) + (w_pwr * pwr_norm) + (w_drift * drift_score)
-    return q
-
-
 def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, power_threshold=None, tolerance=None):
     if not peaks:
         return []
@@ -55,19 +28,6 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
 
         base_harmonic = base_peak.copy()
         base_harmonic['harmonic_index'] = 1
-        base_harmonic['drift'] = 0.0
-
-        snr_norm = base_harmonic['snr']
-        if snr_norm < 0: snr_norm = 0
-        elif snr_norm > 50: snr_norm = 50
-        snr_norm *= 0.01
-
-        pwr_norm = base_harmonic['power'] + 100
-        if pwr_norm < 0: pwr_norm = 0
-        elif pwr_norm > 100: pwr_norm = 100
-        pwr_norm *= 0.003
-
-        base_harmonic['quality'] = snr_norm + pwr_norm + 0.2
 
         harmonics.append(base_harmonic)
 
@@ -112,24 +72,6 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
                 if not is_dup:
                     h_info = best_match.copy()
                     h_info['harmonic_index'] = current_harmonic_idx
-                    h_drift = min_dist / target_freq
-                    h_info['drift'] = h_drift
-
-                    snr_norm = h_info['snr']
-                    if snr_norm < 0: snr_norm = 0
-                    elif snr_norm > 50: snr_norm = 50
-                    snr_norm *= 0.01
-
-                    pwr_norm = h_info['power'] + 100
-                    if pwr_norm < 0: pwr_norm = 0
-                    elif pwr_norm > 100: pwr_norm = 100
-                    pwr_norm *= 0.003
-
-                    drift_score = 1.0 - h_drift
-                    if drift_score < 0: drift_score = 0
-
-                    h_info['quality'] = snr_norm + pwr_norm + (0.2 * drift_score)
-
                     harmonics.append(h_info)
                 consecutive_misses = 0
             else:
@@ -138,21 +80,13 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
             current_harmonic_idx += 1
 
         if len(harmonics) >= min_harmonics:
-            total_quality = 0.0
-            total_drift = 0.0
             total_power = 0.0
             found_indices = set()
             for h in harmonics:
-                total_quality += h['quality']
-                total_drift += h['drift']
-
-                # Harmonic summation: sum of harmonic powers
                 total_power += h['power']
-
                 found_indices.add(h['harmonic_index'])
 
-            avg_drift = total_drift / len(harmonics)
-            score = total_quality * (1.0 - avg_drift)
+            score = total_power
 
             max_found_idx = harmonics[-1]['harmonic_index']
             check_upper = max_found_idx if max_found_idx < 6 else 6
@@ -171,7 +105,8 @@ def detect_harmonics_iterative(peaks, max_candidates=5, snr_threshold=None, powe
     candidates.sort(key=lambda x: x['score'], reverse=True)
     return candidates[:max_candidates]
 
-def track_harmonics(peaks_per_frame, times):
+
+def track_harmonics(peaks_per_frame, times=None):
     active_tracks = []
     completed_tracks = []
 
@@ -220,7 +155,6 @@ def track_harmonics(peaks_per_frame, times):
                     track['max_score'] = cand_score
                     track['best_candidate'] = cand
                     track['best_frame_idx'] = frame_idx
-                    # observability properties
                     track['base_freq'] = cand['base_freq']
                     track['signal_power'] = cand['signal_power']
 
@@ -234,7 +168,6 @@ def track_harmonics(peaks_per_frame, times):
                     'max_score': cand['score'],
                     'best_candidate': cand,
                     'best_frame_idx': frame_idx,
-                    # observability properties
                     'base_freq': cand['base_freq'],
                     'signal_power': cand['signal_power']
                 })
