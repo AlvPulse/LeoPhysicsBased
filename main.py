@@ -6,6 +6,8 @@ import os
 import argparse
 import joblib
 import xgboost as xgb
+import joblib
+import xgboost as xgb
 from torch_geometric.data import Data, Batch
 
 # Import modules
@@ -55,11 +57,14 @@ def run_analysis():
     duration = len(audio) / fs
 
     # 1. Compute STFT, Peaks, and Spectral Features
+    # 1. Compute STFT, Peaks, and Spectral Features
     print("Computing STFT and Peaks...")
+    f, t, Pxx_db, peaks_per_frame, spectral_features = signal_processing.compute_spectrogram_and_peaks(audio, fs)
     f, t, Pxx_db, peaks_per_frame, spectral_features = signal_processing.compute_spectrogram_and_peaks(audio, fs)
 
     # 2. Track Harmonics (Persistence)
     print("Tracking Harmonics...")
+    tracks = harmonic_detection.track_harmonics(peaks_per_frame, t, spectral_features)
     tracks = harmonic_detection.track_harmonics(peaks_per_frame, t, spectral_features)
 
     # 3. Calculate Probabilities Time Series
@@ -82,6 +87,7 @@ def run_analysis():
         best_peaks = peaks_per_frame[best_frame_idx] if best_frame_idx < len(peaks_per_frame) else []
 
         # Score 1: Baseline
+        # Score 1: Baseline
         score1, _ = baseline_model.detect_baseline_heuristic(best_peaks)
 
         # Retrieve Best Candidate Snapshot
@@ -99,6 +105,7 @@ def run_analysis():
             # Predict
             score2, score3, score4 = ensemble.predict_proba(linear_vec, classifier_vec)
 
+        # Assign to time series (Fill from start to end of the track)
         # Assign to time series (Fill from start to end of the track)
         prob_baseline[start_frame:end_frame+1] = score1
         prob_linear[start_frame:end_frame+1] = score2
@@ -145,6 +152,7 @@ def run_analysis():
     ax_psd.set_title("Instantaneous PSD & Detections", fontweight='bold')
     ax_psd.set_xlim(0, config.MAX_FREQ)
     ax_psd.set_ylim(-100, 0)
+    ax_psd.set_ylim(-100, 0)
     ax_psd.grid(alpha=0.3)
     ax_psd.legend(loc='upper right')
 
@@ -159,6 +167,7 @@ def run_analysis():
     the_table.auto_set_font_size(False)
     the_table.set_fontsize(10)
     the_table.scale(1, 1.5)
+
 
     def init():
         line_prob1.set_data([], [])
@@ -177,6 +186,7 @@ def run_analysis():
 
         current_time = t[frame_idx]
 
+        # Update Probabilities (Using Pre-calculated time series)
         # Update Probabilities (Using Pre-calculated time series)
         valid_indices = t <= current_time
         line_prob1.set_data(t[valid_indices], prob_baseline[valid_indices])
@@ -203,13 +213,16 @@ def run_analysis():
             scatter_peaks.set_offsets(np.empty((0, 2)))
 
         # Update Harmonics & Table (Based on Track Logic)
+        # Update Harmonics & Table (Based on Track Logic)
         active_track = None
         if tracks:
             bt = tracks[0]
             if bt['start_frame'] <= frame_idx <= bt['last_seen']:
                 active_track = bt
 
+
         if active_track:
+            # Find candidate in current frame that matches active track
             # Find candidate in current frame that matches active track
             candidates = harmonic_detection.detect_harmonics_iterative(peaks)
             match = None
@@ -245,6 +258,7 @@ def run_analysis():
         return line_prob1, line_prob2, line_prob3, line_prob4, line_psd, line_nf, scatter_peaks, scatter_harmonics, cursor_line, the_table
 
     print(f"Starting Analysis on {FILENAME}")
+    interval_ms = 50 
     interval_ms = 50 
 
     anim = FuncAnimation(fig, update, frames=range(len(t)),
