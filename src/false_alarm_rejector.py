@@ -92,6 +92,11 @@ class FalseAlarmRejector:
         else:
             features['temporal_entropy'] = 0.0
 
+        # Onset Strength
+        import librosa
+        onset_env = librosa.onset.onset_strength(y=audio, sr=fs)
+        features['onset_strength'] = np.mean(onset_env) if len(onset_env) > 0 else 0.0
+
         # 2. Spectral Features
         # Compute Power Spectral Density
         f, Pxx = signal.welch(audio, fs, nperseg=config.N_FFT)
@@ -123,6 +128,10 @@ class FalseAlarmRejector:
 
         # Spectral Centroid (Center of mass of spectrum)
         features['spectral_centroid'] = np.sum(f * Pxx_norm)
+
+        # Band Index (which band has max energy)
+        band_energies = [features['low_band_ratio'], features['mid_band_ratio'], features['high_band_ratio']]
+        features['band_index'] = np.argmax(band_energies)
 
         # Dominant Frequency
         features['dominant_freq'] = f[np.argmax(Pxx)]
